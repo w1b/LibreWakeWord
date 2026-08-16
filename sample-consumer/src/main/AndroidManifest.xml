@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@drawable/ic_sample"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".SampleObserverService"
+            android:exported="true"
+            android:label="@string/observer_label"
+            android:permission="org.librewakeword.permission.BIND_CONSUMER"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="org.librewakeword.action.WAKEWORD_CONSUMER" />
+            </intent-filter>
+            <meta-data android:name="org.librewakeword.consumer.API_VERSION" android:value="1" />
+            <meta-data android:name="org.librewakeword.consumer.EVENTS" android:value="candidate,confirmed" />
+            <meta-data android:name="org.librewakeword.consumer.AUDIO" android:value="prefix" />
+            <meta-data android:name="org.librewakeword.consumer.ROLE" android:value="observer" />
+            <meta-data android:name="org.librewakeword.consumer.LATENCY" android:value="normal" />
+        </service>
+
+        <service
+            android:name=".SampleAssistantService"
+            android:exported="true"
+            android:label="@string/microphone_handler_label"
+            android:permission="org.librewakeword.permission.BIND_CONSUMER"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="org.librewakeword.action.WAKEWORD_CONSUMER" />
+            </intent-filter>
+            <meta-data android:name="org.librewakeword.consumer.API_VERSION" android:value="1" />
+            <meta-data android:name="org.librewakeword.consumer.EVENTS" android:value="confirmed" />
+            <meta-data android:name="org.librewakeword.consumer.AUDIO" android:value="prefix" />
+            <meta-data android:name="org.librewakeword.consumer.ROLE" android:value="handler" />
+            <meta-data android:name="org.librewakeword.consumer.LATENCY" android:value="low" />
+        </service>
+
+        <service
+            android:name=".SampleCandidateHandlerService"
+            android:exported="true"
+            android:label="@string/dsp_handler_label"
+            android:permission="org.librewakeword.permission.BIND_CONSUMER"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="org.librewakeword.action.WAKEWORD_CONSUMER" />
+            </intent-filter>
+            <meta-data android:name="org.librewakeword.consumer.API_VERSION" android:value="1" />
+            <meta-data android:name="org.librewakeword.consumer.EVENTS" android:value="candidate" />
+            <meta-data android:name="org.librewakeword.consumer.AUDIO" android:value="none" />
+            <meta-data android:name="org.librewakeword.consumer.ROLE" android:value="handler" />
+            <meta-data android:name="org.librewakeword.consumer.LATENCY" android:value="low" />
+        </service>
+
+        <service
+            android:name=".SampleLiveOnlyHandlerService"
+            android:exported="true"
+            android:label="@string/live_only_handler_label"
+            android:permission="org.librewakeword.permission.BIND_CONSUMER"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="org.librewakeword.action.WAKEWORD_CONSUMER" />
+            </intent-filter>
+            <meta-data android:name="org.librewakeword.consumer.API_VERSION" android:value="1" />
+            <meta-data android:name="org.librewakeword.consumer.EVENTS" android:value="confirmed" />
+            <meta-data android:name="org.librewakeword.consumer.AUDIO" android:value="none" />
+            <meta-data android:name="org.librewakeword.consumer.ROLE" android:value="handler" />
+            <meta-data android:name="org.librewakeword.consumer.LATENCY" android:value="normal" />
+        </service>
+
+        <service
+            android:name=".SampleCustomRecorderService"
+            android:exported="true"
+            android:label="@string/custom_recorder_handler_label"
+            android:permission="org.librewakeword.permission.BIND_CONSUMER"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="org.librewakeword.action.WAKEWORD_CONSUMER" />
+            </intent-filter>
+            <meta-data android:name="org.librewakeword.consumer.API_VERSION" android:value="1" />
+            <meta-data android:name="org.librewakeword.consumer.EVENTS" android:value="confirmed" />
+            <meta-data android:name="org.librewakeword.consumer.AUDIO" android:value="prefix" />
+            <meta-data android:name="org.librewakeword.consumer.ROLE" android:value="handler" />
+            <meta-data android:name="org.librewakeword.consumer.LATENCY" android:value="low" />
+        </service>
+
+        <service
+            android:name="org.librewakeword.client.MicrophoneHandoffService"
+            android:exported="true"
+            android:foregroundServiceType="microphone"
+            android:permission="org.librewakeword.permission.BIND_CONSUMER"
+            android:stopWithTask="false"
+            tools:ignore="ExportedService" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.recordings"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/recording_paths" />
+        </provider>
+    </application>
+</manifest>

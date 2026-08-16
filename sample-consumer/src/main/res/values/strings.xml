@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LWW API Sample</string>
+    <string name="observer_label">Sample event observer</string>
+    <string name="microphone_handler_label">Confirmed handler with wake word</string>
+    <string name="dsp_handler_label">Sample DSP microphone handler</string>
+    <string name="live_only_handler_label">Confirmed live-only handler</string>
+    <string name="custom_recorder_handler_label">Confirmed custom-recorder handler</string>
+</resources>

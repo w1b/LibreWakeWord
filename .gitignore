@@ -1,0 +1,29 @@
+# Android build outputs
+build/
+apk/
+gen/
+obj/
+.gradle/
+local.properties
+.idea/
+*.iml
+
+# Local signing/debug artifacts
+*.keystore
+*.idsig
+
+# Downloaded or generated binaries
+*.apk
+*.dex
+*.jar
+*.so
+!gradle/wrapper/gradle-wrapper.jar
+
+# Vendor JNI runtimes (SODA / speech-micro); never commit
+app/src/main/jniLibs/
+
+# Local model/data dumps
+*.tflite
+
+# Device/audit logs
+*.log

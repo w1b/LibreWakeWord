@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <permission
+        android:name="org.librewakeword.permission.BIND_CONSUMER"
+        android:protectionLevel="signature" />
+
+    <uses-permission android:name="org.librewakeword.permission.BIND_CONSUMER" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- These role permissions are granted to the selected voice interaction service. -->
+    <uses-permission
+        android:name="android.permission.CAPTURE_AUDIO_HOTWORD"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.MANAGE_SOUND_TRIGGER"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.ASSIST" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VOICE_COMMAND" />
+        </intent>
+        <intent>
+            <action android:name="org.librewakeword.action.WAKEWORD_CONSUMER" />
+        </intent>
+    </queries>
+
+    <application
+        android:name="org.librewakeword.HotwordApplication"
+        android:label="LibreWakeWord"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.LibreWakeWord"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false">
+        <activity android:name="org.librewakeword.MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <activity
+            android:name="org.librewakeword.AccessRequestActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.LibreWakeWord">
+            <intent-filter>
+                <action android:name="org.librewakeword.action.REQUEST_ACCESS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <receiver
+            android:name="org.librewakeword.StartupReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <provider
+            android:name="org.librewakeword.integration.WakewordAudioProvider"
+            android:authorities="org.librewakeword.audio"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+        <service
+            android:name="org.librewakeword.WakewordVoiceInteractionService"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true">
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction_service" />
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name="org.librewakeword.WakewordVoiceInteractionSessionService"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true" />
+        <service
+            android:name="org.librewakeword.WakewordRecognitionService"
+            android:permission="android.permission.BIND_SPEECH_RECOGNITION_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+            </intent-filter>
+        </service>
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="org.librewakeword.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+    </application>
+    <instrumentation
+        android:name="org.librewakeword.HotwordInstrumentation"
+        android:targetPackage="org.librewakeword"
+        android:label="Hotword instrumentation" />
+</manifest>
