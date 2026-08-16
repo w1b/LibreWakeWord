@@ -4,6 +4,7 @@
 
 Real, hardware-based custom wake word support for Android (including the original reverse-engineered "Hey Google" pipeline). Supports GrapheneOS and other de-Googled OSes! Currently POC and alpha. Powered by Shizuku.
 
+Super dank diagram thing to show how cool it is thanks codex:
 <img src="docs/assets/dsp-model-load.svg" alt="Flow chart showing how a DSP model is loaded into the DSP" width="100%">
 
 </div>
