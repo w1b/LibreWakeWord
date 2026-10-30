@@ -1,8 +1,16 @@
 package org.librewakeword;
 
-import android.content.Context;
 import android.util.Log;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+
+/**
+ * Shizuku user service, running as the shell uid. It selects LibreWakeWord's voice-interaction
+ * service and starts {@link HotwordInstrumentation}. It is a daemon because `am instrument -w`
+ * must outlive the call: the instrumentation (and the adopted shell identity) ends when this
+ * process dies.
+ */
 public class HotwordUserService extends IHotwordUserService.Stub {
     private static final String TAG = "HotwordUserService";
     private static final String VIS_COMPONENT =
@@ -10,48 +18,40 @@ public class HotwordUserService extends IHotwordUserService.Stub {
     private static final String INSTRUMENTATION_COMPONENT =
             "org.librewakeword/.HotwordInstrumentation";
 
-    public HotwordUserService(Context context) {
-        p("created with context: " + context);
-    }
-
-    public HotwordUserService() {
-        p("created without context");
-    }
-
     @Override
-    public void launchInstrumentation() {
+    public void launchInstrumentation(boolean openUi) {
         try {
-            Process settingsProc = new ProcessBuilder("settings", "put", "secure",
-                    "voice_interaction_service", VIS_COMPONENT).start();
-            int settingsRc = settingsProc.waitFor();
-            p("restored voice_interaction_service setting, rc=" + settingsRc);
+            // Only the voice-interaction service setting is needed, not the default assistant
+            // role. The role observer resets this setting at boot and whenever the role
+            // changes, so it is written on every arm.
+            int settingsRc = new ProcessBuilder("settings", "put", "secure",
+                    "voice_interaction_service", VIS_COMPONENT).start().waitFor();
+            Log.i(TAG, "selected voice interaction service, rc=" + settingsRc);
 
             Process proc = new ProcessBuilder("am", "instrument", "--no-hidden-api-checks", "-w",
+                    "-e", HotwordInstrumentation.ARG_OPEN_UI, String.valueOf(openUi),
                     INSTRUMENTATION_COMPONENT)
                     .redirectErrorStream(true)
                     .start();
             Thread drain = new Thread(() -> {
-                try (java.io.BufferedReader r = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(proc.getInputStream()))) {
+                try (BufferedReader r = new BufferedReader(
+                        new InputStreamReader(proc.getInputStream()))) {
                     String line;
                     while ((line = r.readLine()) != null) {
-                        p("[am instrument] " + line);
+                        Log.i(TAG, "[am instrument] " + line);
                     }
                 } catch (Throwable ignored) {
                 }
             }, "am-instrument-drain");
             drain.setDaemon(true);
             drain.start();
-            p("launchInstrumentation: started am instrument --no-hidden-api-checks -w");
         } catch (Throwable t) {
-            p("launchInstrumentation THREW: " + Log.getStackTraceString(t));
+            Log.e(TAG, "launchInstrumentation failed", t);
         }
     }
 
-    @Override public void destroy() { p("destroy() called, exiting"); System.exit(0); }
-
-    private static void p(String msg) {
-        Log.i(TAG, msg);
-        System.out.println("[" + TAG + "] " + msg);
+    @Override
+    public void destroy() {
+        System.exit(0);
     }
 }

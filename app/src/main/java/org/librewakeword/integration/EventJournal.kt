@@ -8,56 +8,17 @@ import androidx.core.net.toUri
 import org.librewakeword.client.WakewordAudio
 import org.librewakeword.client.WakewordEvent
 
-/** Small bounded journal used for diagnostics, deduplication, and delivery accounting. */
+/** Durable queue of observer deliveries that have not been acknowledged yet. */
 class EventJournal(context: Context) : SQLiteOpenHelper(context, NAME, null, VERSION) {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            """CREATE TABLE events (
-                event_id TEXT PRIMARY KEY,
-                detection_id TEXT NOT NULL,
-                stage INTEGER NOT NULL,
-                elapsed_nanos INTEGER NOT NULL,
-                epoch_millis INTEGER NOT NULL,
-                phrase TEXT,
-                audio_uri TEXT
-            )""".trimIndent(),
-        )
-        db.execSQL("CREATE INDEX events_time ON events(epoch_millis DESC)")
         createDeliveries(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 4) {
-            db.execSQL("DROP TABLE IF EXISTS deliveries")
-            createDeliveries(db)
-        } else if (oldVersion < 5) {
-            db.execSQL(
-                "ALTER TABLE deliveries ADD COLUMN audio_start_elapsed_nanos INTEGER",
-            )
-        }
-    }
-
-    fun record(event: WakewordEvent) {
-        writableDatabase.inTransaction {
-            insertWithOnConflict(
-                "events",
-                null,
-                ContentValues().apply {
-                    put("event_id", event.eventId)
-                    put("detection_id", event.detectionId)
-                    put("stage", event.stage)
-                    put("elapsed_nanos", event.occurredAtElapsedRealtimeNanos)
-                    put("epoch_millis", event.occurredAtEpochMillis)
-                    put("phrase", event.phrase)
-                    put("audio_uri", event.audio?.uri?.toString())
-                },
-                SQLiteDatabase.CONFLICT_REPLACE,
-            )
-            execSQL(
-                "DELETE FROM events WHERE event_id NOT IN " +
-                    "(SELECT event_id FROM events ORDER BY epoch_millis DESC LIMIT $MAX_EVENTS)",
-            )
-        }
+        // Pending deliveries are short-lived, so an upgrade just starts over.
+        db.execSQL("DROP TABLE IF EXISTS events")
+        db.execSQL("DROP TABLE IF EXISTS deliveries")
+        createDeliveries(db)
     }
 
     @Synchronized
@@ -183,8 +144,7 @@ class EventJournal(context: Context) : SQLiteOpenHelper(context, NAME, null, VER
 
     private companion object {
         const val NAME = "wakeword-events-v1.db"
-        const val VERSION = 5
-        const val MAX_EVENTS = 256
+        const val VERSION = 6
         const val MAX_DELIVERIES = 256
     }
 }

@@ -39,6 +39,7 @@ public class AlwaysOnHotwordDetector {
     }
 
     public static class EventPayload {
-        public HotwordDetectedResult getHotwordDetectedResult() { throw new RuntimeException("stub"); }
+        public android.media.AudioFormat getCaptureAudioFormat() { throw new RuntimeException("stub"); }
+        public Integer getCaptureSession() { throw new RuntimeException("stub"); }
     }
 }

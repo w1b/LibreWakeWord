@@ -1,7 +1,6 @@
 package org.librewakeword.detection
 
 import android.content.Context
-import android.os.SharedMemory
 import android.util.Log
 import org.librewakeword.DetectionNotifier
 import org.librewakeword.ModelConfig
@@ -32,7 +31,6 @@ class DetectionCoordinator(private val context: Context) {
         val event = candidate(detectionId, elapsedNanos, epochMillis)
         candidateEvents[detectionId] = event
         router.route(event)
-        worker.execute { journal.record(event) }
         worker.schedule({ candidateEvents.remove(detectionId, event) }, 10, TimeUnit.SECONDS)
     }
 
@@ -41,9 +39,7 @@ class DetectionCoordinator(private val context: Context) {
     }
 
     fun onTerminalCandidate(detectionId: String, elapsedNanos: Long, epochMillis: Long) {
-        val event = candidate(detectionId, elapsedNanos, epochMillis)
-        router.route(event)
-        worker.execute { journal.record(event) }
+        router.route(candidate(detectionId, elapsedNanos, epochMillis))
     }
 
     fun processCapturedCompletion(
@@ -56,19 +52,15 @@ class DetectionCoordinator(private val context: Context) {
         handoffAlreadyStarted: Boolean,
     ) {
         worker.execute {
-            try {
-                complete(
-                    detectionId,
-                    accepted,
-                    sampleRate,
-                    channelCount,
-                    audio,
-                    audioStartElapsedRealtimeNanos,
-                    handoffAlreadyStarted,
-                )
-            } catch (error: Throwable) {
-                Log.e(TAG, "Could not process captured detection $detectionId", error)
-            }
+            complete(
+                detectionId,
+                accepted,
+                sampleRate,
+                channelCount,
+                audio,
+                audioStartElapsedRealtimeNanos,
+                handoffAlreadyStarted,
+            )
         }
     }
 
@@ -99,36 +91,14 @@ class DetectionCoordinator(private val context: Context) {
         }
     }
 
-    fun processCompletion(
-        detectionId: String,
-        accepted: Boolean,
-        sampleRate: Int,
-        channelCount: Int,
-        audioBytes: Int,
-        memory: SharedMemory?,
-        finished: () -> Unit,
-    ) {
-        worker.execute {
-            try {
-                val pcm = readAudio(memory, audioBytes)
-                complete(detectionId, accepted, sampleRate, channelCount, pcm)
-            } catch (error: Throwable) {
-                Log.e(TAG, "Could not complete detection $detectionId", error)
-            } finally {
-                memory?.close()
-                finished()
-            }
-        }
-    }
-
     private fun complete(
         detectionId: String,
         accepted: Boolean,
         sampleRate: Int,
         channelCount: Int,
         pcm: ByteArray,
-        audioStartElapsedRealtimeNanos: Long? = null,
-        handoffAlreadyStarted: Boolean = false,
+        audioStartElapsedRealtimeNanos: Long?,
+        handoffAlreadyStarted: Boolean,
     ) {
         try {
             val audio = audioStore.create(
@@ -166,8 +136,6 @@ class DetectionCoordinator(private val context: Context) {
                 router.route(it, candidateAudioUpdate = true)
             }
             confirmed?.let(::dispatchConfirmedObserversAndActions)
-            enrichedCandidate?.let(journal::record)
-            confirmed?.let(journal::record)
         } catch (error: Throwable) {
             Log.e(TAG, "Could not complete detection $detectionId", error)
         }
@@ -224,16 +192,6 @@ class DetectionCoordinator(private val context: Context) {
             phrase = model.phrase,
             localeTag = model.localeTag,
         )
-    }
-
-    private fun readAudio(memory: SharedMemory?, byteCount: Int): ByteArray {
-        if (memory == null || byteCount <= 0) return ByteArray(0)
-        val buffer = memory.mapReadOnly()
-        return try {
-            ByteArray(minOf(byteCount, buffer.remaining())).also(buffer::get)
-        } finally {
-            SharedMemory.unmap(buffer)
-        }
     }
 
     private companion object {

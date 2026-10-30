@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.os.Bundle
 import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
@@ -11,12 +12,10 @@ import android.os.SystemClock
 import android.util.Log
 import org.librewakeword.client.IWakewordConsumer
 import org.librewakeword.client.IWakewordDeliveryCallback
-import org.librewakeword.client.IMicrophoneHandoffStatus
 import org.librewakeword.client.WakewordAvailability
 import org.librewakeword.client.WakewordContract
 import org.librewakeword.client.WakewordEvent
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Asynchronous reverse-binding transport. Consumer work never runs on the detection thread. */
@@ -26,15 +25,8 @@ class ConsumerRouter(
     private val journal: EventJournal,
 ) {
     private val connections = ConcurrentHashMap<ComponentName, ConsumerConnection>()
-    private val capabilityConnections = ConcurrentHashMap<String, HandoffCapabilityConnection>()
     @Volatile private var enabledConsumers: List<ConsumerIntegration> = emptyList()
     private val handler = Handler(Looper.getMainLooper())
-    private val capabilityExecutor = Executors.newSingleThreadExecutor { task ->
-        Thread({
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
-            task.run()
-        }, "wakeword-capability")
-    }
 
     private class PendingDelivery(
         val event: WakewordEvent,
@@ -163,14 +155,6 @@ class ConsumerRouter(
         allowHandoff = false,
         handoffCompletion = true,
     )
-
-    fun close() {
-        connections.values.forEach(ConsumerConnection::close)
-        connections.clear()
-        capabilityConnections.values.forEach(HandoffCapabilityConnection::close)
-        capabilityConnections.clear()
-        capabilityExecutor.shutdownNow()
-    }
 
     private fun connection(integration: ConsumerIntegration): ConsumerConnection =
         connections.computeIfAbsent(integration.component) { ConsumerConnection(integration) }
@@ -322,39 +306,27 @@ class ConsumerRouter(
                     when (delivery.kind) {
                         DeliveryKind.HANDOFF_START -> {
                             val handoffStartedAt = SystemClock.elapsedRealtimeNanos()
-                            val capability = HandoffCapabilityConnection(integration, event)
-                            capabilityConnections.put(event.eventId, capability)?.close()
-                            try {
-                                // Request foreground promotion first. The client SDK rendezvous
-                                // accepts either process-ordering outcome, but does not invoke
-                                // consumer capture until the fresh service is microphone-foreground.
-                                context.startForegroundService(
-                                    Intent(WakewordContract.ACTION_BEGIN_MICROPHONE_HANDOFF)
-                                        .setClassName(
-                                            integration.component.packageName,
-                                            WakewordContract.MICROPHONE_HANDOFF_SERVICE,
+                            lendBackgroundActivityStarts()
+                            // The consumer's control service is bound (this is draining),
+                            // so the SDK handoff service can find it in-process.
+                            context.startForegroundService(
+                                Intent(WakewordContract.ACTION_BEGIN_MICROPHONE_HANDOFF)
+                                    .setClassName(
+                                        integration.component.packageName,
+                                        WakewordContract.MICROPHONE_HANDOFF_SERVICE,
+                                    )
+                                    .putExtra(WakewordContract.EXTRA_EVENT, event)
+                                    .putExtra(
+                                        WakewordContract.EXTRA_CONSUMER_CLASS,
+                                        integration.component.className,
+                                    )
+                                    .putExtras(Bundle().apply {
+                                        putBinder(
+                                            WakewordContract.EXTRA_DELIVERY_CALLBACK,
+                                            callback.asBinder(),
                                         )
-                                        .putExtra(
-                                            WakewordContract.EXTRA_HANDOFF_TOKEN,
-                                            event.eventId,
-                                        )
-                                        .putExtra(WakewordContract.EXTRA_EVENT_ID, event.eventId)
-                                        .putExtras(android.os.Bundle().apply {
-                                            putBinder(
-                                                WakewordContract.EXTRA_HANDOFF_STATUS,
-                                                capability.foregroundStatus.asBinder(),
-                                            )
-                                        }),
-                                )
-                                target.beginMicrophoneHandoff(
-                                    event,
-                                    callback,
-                                )
-                                capability.bind()
-                            } catch (error: Throwable) {
-                                capability.close()
-                                throw error
-                            }
+                                    }),
+                            )
                             Log.i(
                                 TAG,
                                 "Requested microphone handoff event=${event.eventId} " +
@@ -400,6 +372,36 @@ class ConsumerRouter(
                     scheduleRetry()
                     return
                 }
+            }
+        }
+
+        /**
+         * Lets the handler start its own activities (its assistant UI, say) for a short window
+         * after the wake word, as Android does for the active voice-interaction service.
+         * Background apps can't start activities on their own; this binding lends them
+         * LibreWakeWord's privilege and requires the START_ACTIVITIES_FROM_BACKGROUND permission
+         * adopted by the arming session.
+         */
+        private fun lendBackgroundActivityStarts() {
+            val connection = object : ServiceConnection {
+                override fun onServiceConnected(name: ComponentName, service: IBinder) = Unit
+                override fun onServiceDisconnected(name: ComponentName) = Unit
+            }
+            try {
+                val bound = context.bindService(
+                    Intent(WakewordContract.ACTION_CONSUMER).setComponent(integration.component),
+                    connection,
+                    Context.BIND_AUTO_CREATE or BIND_ALLOW_BACKGROUND_ACTIVITY_STARTS,
+                )
+                if (bound) {
+                    handler.postDelayed(
+                        { runCatching { context.unbindService(connection) } },
+                        ACTIVITY_START_WINDOW_MILLIS,
+                    )
+                }
+            } catch (error: Throwable) {
+                Log.w(TAG, "Could not let ${integration.component.flattenToShortString()} " +
+                    "start activities", error)
             }
         }
 
@@ -459,72 +461,14 @@ class ConsumerRouter(
         }
     }
 
-    /** Event-scoped transfer of LibreWakeWord's while-in-use microphone capability. */
-    private inner class HandoffCapabilityConnection(
-        private val integration: ConsumerIntegration,
-        private val event: WakewordEvent,
-    ) : ServiceConnection {
-        private val requestedAt = SystemClock.elapsedRealtimeNanos()
-        @Volatile private var bound = false
-        @Volatile private var closed = false
-
-        val foregroundStatus = object : IMicrophoneHandoffStatus.Stub() {
-            override fun foregroundReady(eventId: String?) {
-                if (eventId == event.eventId) close()
-            }
-        }
-
-        fun bind() {
-            if (closed) return
-            val intent = Intent(WakewordContract.ACTION_CONSUMER).setComponent(integration.component)
-            try {
-                bound = context.bindService(
-                    intent,
-                    Context.BIND_AUTO_CREATE or
-                        Context.BIND_INCLUDE_CAPABILITIES or
-                        Context.BIND_IMPORTANT,
-                    capabilityExecutor,
-                    this,
-                )
-                if (!bound) close()
-            } catch (error: Throwable) {
-                Log.w(TAG, "Could not establish microphone capability binding", error)
-                close()
-            }
-            handler.postDelayed(::close, CAPABILITY_BIND_TIMEOUT_MILLIS)
-        }
-
-        override fun onServiceConnected(name: ComponentName, service: IBinder) {
-            if (closed) return
-            Log.i(
-                TAG,
-                "Microphone capability ready event=${event.eventId} " +
-                    "bindMs=${millis(SystemClock.elapsedRealtimeNanos() - requestedAt)}",
-            )
-            // This binding transfers LibreWakeWord's event-scoped while-in-use microphone
-            // capability while the fresh handoff service promotes itself to foreground.
-        }
-
-        override fun onServiceDisconnected(name: ComponentName) = close()
-        override fun onBindingDied(name: ComponentName) = close()
-        override fun onNullBinding(name: ComponentName) = close()
-
-        @Synchronized
-        fun close() {
-            if (closed) return
-            closed = true
-            capabilityConnections.remove(event.eventId, this)
-            if (bound) runCatching { context.unbindService(this) }
-            bound = false
-        }
-    }
-
     private companion object {
         const val TAG = "WakewordConsumers"
+        const val ACTIVITY_START_WINDOW_MILLIS = 10_000L
+        // Context.BIND_ALLOW_BACKGROUND_ACTIVITY_STARTS, a hidden system API.
+        const val BIND_ALLOW_BACKGROUND_ACTIVITY_STARTS = 0x00100000
         const val ACK_TIMEOUT_MILLIS = 10_000L
         const val HANDLER_ACK_TIMEOUT_MILLIS = 2_000L
         const val BIND_RETRY_MILLIS = 1_000L
-        const val CAPABILITY_BIND_TIMEOUT_MILLIS = 5_000L
         fun millis(nanos: Long): String = "%.1f".format(nanos / 1_000_000.0)
     }
 }

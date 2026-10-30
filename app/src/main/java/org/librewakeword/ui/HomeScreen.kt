@@ -43,7 +43,6 @@ fun HomeScreen(
     onOpenIntegrations: () -> Unit,
     onRequestShizukuPermission: () -> Unit,
     onOpenShizukuManager: () -> Unit,
-    onOpenVoiceInputSettings: () -> Unit,
     onArm: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -70,13 +69,11 @@ fun HomeScreen(
                 state = state,
                 onRequestShizukuPermission = onRequestShizukuPermission,
                 onOpenShizukuManager = onOpenShizukuManager,
-                onOpenVoiceInputSettings = onOpenVoiceInputSettings,
                 onArm = onArm,
                 onStop = onStop,
                 onOpenSettings = onOpenSettings,
             )
             IntegrationsCard(state = state, onOpenIntegrations = onOpenIntegrations)
-            DiagnosticsRow(state)
         }
     }
 }
@@ -86,7 +83,6 @@ private fun StatusCard(
     state: HotwordUiState,
     onRequestShizukuPermission: () -> Unit,
     onOpenShizukuManager: () -> Unit,
-    onOpenVoiceInputSettings: () -> Unit,
     onArm: () -> Unit,
     onStop: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -134,16 +130,12 @@ private fun StatusCard(
                     Button(onClick = onRequestShizukuPermission) { Text("Grant Shizuku permission") }
                 UiStatus.NEEDS_MODEL ->
                     Button(onClick = onOpenSettings) { Text("Import a model") }
-                UiStatus.NEEDS_VIS ->
-                    Button(onClick = onOpenVoiceInputSettings) { Text("Set as assistant") }
-                UiStatus.READY_TO_ARM, UiStatus.READY_TO_RESTORE_VIS ->
-                    Button(onClick = onArm) { Text("Arm") }
+                UiStatus.READY_TO_ARM -> Button(onClick = onArm) { Text("Arm") }
                 UiStatus.ARMING -> CircularProgressIndicator(modifier = Modifier.size(28.dp))
                 UiStatus.LISTENING -> {
                     OutlinedButton(onClick = onStop) { Text("Stop") }
                     Text(
-                        text = "Stopping fully closes the app (an Android limitation of the " +
-                            "privileged arming trick) -- reopen and tap Arm to resume.",
+                        text = "Stopping also closes LibreWakeWord.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -162,8 +154,7 @@ private fun StatusIcon(status: UiStatus) {
         UiStatus.LISTENING -> Icon(Icons.Filled.Mic, contentDescription = null)
         UiStatus.ERROR -> Icon(Icons.Filled.Error, contentDescription = null)
         UiStatus.ARMING -> Icon(Icons.Filled.Sync, contentDescription = null)
-        UiStatus.READY_TO_ARM, UiStatus.READY_TO_RESTORE_VIS ->
-            Icon(Icons.Filled.CheckCircle, contentDescription = null)
+        UiStatus.READY_TO_ARM -> Icon(Icons.Filled.CheckCircle, contentDescription = null)
         UiStatus.STOPPED -> Icon(Icons.Filled.MicOff, contentDescription = null)
         else -> Icon(Icons.Filled.Error, contentDescription = null)
     }
@@ -172,8 +163,6 @@ private fun StatusIcon(status: UiStatus) {
 private fun statusHeadline(state: HotwordUiState): String = when (state.status) {
     UiStatus.NEEDS_SHIZUKU -> "Shizuku not running"
     UiStatus.NEEDS_SHIZUKU_PERMISSION -> "Needs Shizuku permission"
-    UiStatus.NEEDS_VIS -> "Not set as voice assistant"
-    UiStatus.READY_TO_RESTORE_VIS -> "Ready to restore and arm"
     UiStatus.NEEDS_MODEL -> "No wake word model"
     UiStatus.READY_TO_ARM -> "Ready to arm"
     UiStatus.ARMING -> "Arming…"
@@ -203,16 +192,4 @@ private fun IntegrationsCard(
             Button(onClick = onOpenIntegrations) { Text("Manage integrations") }
         }
     }
-}
-
-@Composable
-private fun DiagnosticsRow(state: HotwordUiState) {
-    Text(
-        text = "Shizuku: ${if (state.shizukuRunning) "running" else "stopped"} · " +
-            "permission: ${if (state.shizukuGranted) "granted" else "not granted"} · " +
-            "assistant role: ${if (state.isCurrentVis) "active" else "inactive"} · " +
-            "detector: ${if (state.recognitionStarted) "armed" else "idle"}",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
 }
