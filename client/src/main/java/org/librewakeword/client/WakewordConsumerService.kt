@@ -1,8 +1,6 @@
 package org.librewakeword.client
 
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.ComponentName
@@ -16,6 +14,7 @@ import android.os.Process
 import android.util.Log
 import androidx.annotation.MainThread
 import androidx.annotation.WorkerThread
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Base service for application integrations. Declare a subclass with
@@ -33,25 +32,6 @@ abstract class WakewordConsumerService : Service() {
     private var isMicrophoneHandler = false
 
     private val binder = object : IWakewordConsumer.Stub() {
-        override fun beginMicrophoneHandoff(
-            event: WakewordEvent,
-            callback: IWakewordDeliveryCallback?,
-        ) {
-            if (!isLibreWakewordCaller()) return
-            val target = microphoneHandoffHandler ?: return
-            target.post {
-                val prepared = MicrophoneHandoffRegistry.begin(
-                    this@WakewordConsumerService,
-                    event,
-                    callback,
-                )
-                target.postDelayed(
-                    { MicrophoneHandoffRegistry.expire(prepared) },
-                    HANDOFF_TOKEN_LIFETIME_MILLIS,
-                )
-            }
-        }
-
         override fun completeMicrophoneHandoff(
             event: WakewordEvent,
             callback: IWakewordDeliveryCallback?,
@@ -78,10 +58,11 @@ abstract class WakewordConsumerService : Service() {
             mainHandler.post {
                 try {
                     onWakeword(event)
-                    callback?.acknowledge(event.eventId)
                 } catch (error: Throwable) {
+                    // Acknowledge anyway: redelivering to a consumer that throws can't succeed.
                     Log.e(TAG, "Consumer callback failed for ${event.eventId}", error)
                 }
+                runCatching { callback?.acknowledge(event.eventId) }
             }
         }
 
@@ -100,6 +81,7 @@ abstract class WakewordConsumerService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instances[javaClass.name] = this
         val metadata = runCatching {
             packageManager.getServiceInfo(
                 ComponentName(this, javaClass),
@@ -116,7 +98,7 @@ abstract class WakewordConsumerService : Service() {
                 thread.start()
                 microphoneHandoffHandler = Handler(thread.looper)
             }
-            ensureDefaultNotificationChannel()
+            MicrophoneHandoffService.ensureNotificationChannel(this)
         }
     }
 
@@ -149,7 +131,7 @@ abstract class WakewordConsumerService : Service() {
     @MainThread
     open fun createMicrophoneHandoffNotification(event: WakewordEvent): Notification {
         val appLabel = applicationInfo.loadLabel(packageManager).toString()
-        return Notification.Builder(this, HANDOFF_NOTIFICATION_CHANNEL)
+        return Notification.Builder(this, MicrophoneHandoffService.NOTIFICATION_CHANNEL)
             .setContentTitle("$appLabel is listening")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setCategory(Notification.CATEGORY_SERVICE)
@@ -164,7 +146,7 @@ abstract class WakewordConsumerService : Service() {
     open fun onWakeword(event: WakewordEvent) = Unit
 
     override fun onDestroy() {
-        MicrophoneHandoffRegistry.invalidate(this)
+        instances.remove(javaClass.name, this)
         microphoneHandoffHandler = null
         microphoneHandoffThread?.quitSafely()
         microphoneHandoffThread = null
@@ -172,25 +154,12 @@ abstract class WakewordConsumerService : Service() {
         super.onDestroy()
     }
 
-    /** Schedules capture only after the SDK handoff service has entered microphone foreground. */
-    internal fun dispatchMicrophoneHandoff(prepared: MicrophoneHandoffRegistry.Prepared) {
+    /** Runs the consumer's handoff callback on the audio-priority handoff thread. */
+    internal fun dispatchMicrophoneHandoff(handoff: MicrophoneHandoffRegistry.Handoff) {
         val target = microphoneHandoffHandler
-        if (target == null) {
-            MicrophoneHandoffRegistry.markFailed(prepared)
-            prepared.lifecycle.close()
-            return
+        if (target == null || !target.post { MicrophoneHandoffRegistry.activate(handoff) }) {
+            MicrophoneHandoffRegistry.fail(handoff)
         }
-        target.post { MicrophoneHandoffRegistry.activate(prepared) }
-    }
-
-    private fun ensureDefaultNotificationChannel() {
-        getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(
-                HANDOFF_NOTIFICATION_CHANNEL,
-                "Wake word microphone",
-                NotificationManager.IMPORTANCE_LOW,
-            ),
-        )
     }
 
     private fun isLibreWakewordCaller(): Boolean {
@@ -199,9 +168,11 @@ abstract class WakewordConsumerService : Service() {
             ?.contains(WakewordContract.LIBREWAKEWORD_PACKAGE) == true
     }
 
-    private companion object {
-        const val TAG = "WakewordConsumer"
-        const val HANDOFF_TOKEN_LIFETIME_MILLIS = 60_000L
-        const val HANDOFF_NOTIFICATION_CHANNEL = "librewakeword_microphone_handoff"
+    internal companion object {
+        private const val TAG = "WakewordConsumer"
+        // Lets the handoff service, started separately in this process, find the consumer.
+        private val instances = ConcurrentHashMap<String, WakewordConsumerService>()
+
+        fun running(className: String): WakewordConsumerService? = instances[className]
     }
 }

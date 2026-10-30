@@ -68,15 +68,6 @@ final class SecondStageModel {
         }
     }
 
-    static void importFile(Context context, File source) throws Exception {
-        if (!source.isFile() || source.length() == 0) {
-            throw new IllegalArgumentException("Second-stage model missing or empty: " + source);
-        }
-        try (InputStream in = new FileInputStream(source)) {
-            importStream(context, in);
-        }
-    }
-
     static void importUri(Context context, Uri source) throws Exception {
         InputStream stream = context.getContentResolver().openInputStream(source);
         if (stream == null) {

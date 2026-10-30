@@ -11,9 +11,9 @@ object WakewordContract {
         "org.librewakeword.action.BEGIN_MICROPHONE_HANDOFF"
     const val MICROPHONE_HANDOFF_SERVICE =
         "org.librewakeword.client.MicrophoneHandoffService"
-    const val EXTRA_HANDOFF_TOKEN = "org.librewakeword.extra.HANDOFF_TOKEN"
-    const val EXTRA_EVENT_ID = "org.librewakeword.extra.EVENT_ID"
-    const val EXTRA_HANDOFF_STATUS = "org.librewakeword.extra.HANDOFF_STATUS"
+    const val EXTRA_EVENT = "org.librewakeword.extra.EVENT"
+    const val EXTRA_DELIVERY_CALLBACK = "org.librewakeword.extra.DELIVERY_CALLBACK"
+    const val EXTRA_CONSUMER_CLASS = "org.librewakeword.extra.CONSUMER_CLASS"
 
     const val META_API_VERSION = "org.librewakeword.consumer.API_VERSION"
     const val META_EVENTS = "org.librewakeword.consumer.EVENTS"

@@ -22,9 +22,21 @@ LibreWakeWord routing coordinator
 
 ## Arming
 
-Android restricts keyphrase enrollment and `AlwaysOnHotwordDetector` creation to the active voice-interaction service and privileged callers. LibreWakeWord is selected as the default voice-interaction service. A Shizuku daemon launches the app's instrumentation with hidden-API checks disabled; instrumentation adopts the required shell permissions, enrolls the user-supplied model, creates the detector, and retains that identity while armed.
+Only the current voice-interaction service (VIS) may enroll a keyphrase model and create an `AlwaysOnHotwordDetector`. The system checks this by uid against the `voice_interaction_service` secure setting. It does not check the default-assistant role. LibreWakeWord therefore writes that setting itself and leaves the role alone, so any activity-based assistant can stay the default assistant. The cost is that only one VIS can be active at a time, so an assistant that is itself a VIS can't run alongside LibreWakeWord.
 
-Shizuku launches the privileged operation. It is not part of audio capture or consumer delivery. The hardware DSP remains armed through Android's sound-trigger stack.
+The privileged part runs in three hops:
+
+1. A Shizuku user service, running as the shell uid, writes `voice_interaction_service` and runs `am instrument` on LibreWakeWord's own `HotwordInstrumentation`.
+2. Because shell is the instrumentation source, the instrumentation can adopt shell's `MANAGE_VOICE_KEYPHRASES`, `RECORD_AUDIO`, `CAPTURE_AUDIO_HOTWORD` and `START_ACTIVITIES_FROM_BACKGROUND` for LibreWakeWord's uid. The last one isn't needed for detection; it lets LibreWakeWord lend a woken handler activity starts (see below). It enrolls the model, binds the VIS itself, and creates the detector.
+3. It holds that identity until the user stops arming, because the sound-trigger middleware rechecks the permissions for as long as recognition runs.
+
+`am instrument` force-stops the package first. That kills the system's own binding to the VIS, and VoiceInteractionManagerService does not rebind it. That is why the instrumentation binds the service and calls `onReady()` itself.
+
+The instrumentation is also what lets LibreWakeWord start activities and consumer microphone foreground services from the background. A process instrumented by shell inherits shell's background-start privileges. The VIS role contributes nothing here, since the system's binding is gone.
+
+Calling the sound-trigger middleware directly would avoid the VIS entirely. It isn't possible: the HAL's SELinux policy only maps model memory created by `system_server` and a few HALs, never by an app or shell. The VIS path is the only route that gets `system_server` to load a keyphrase model.
+
+Shizuku is not part of audio capture or consumer delivery. Shizuku and the `am instrument` process it hosts must stay alive while armed. After a reboot, LibreWakeWord re-arms as soon as Shizuku is running again.
 
 ## Verification
 
@@ -48,11 +60,14 @@ while armed                              at a wake event
 warm consumer control service            fresh SDK handoff service
   • receives availability                  • started directly by LibreWakeWord
   • warms process resources                 • enters microphone FGS immediately
-  • never activates the microphone          • invokes the prepared consumer callback
+  • never activates the microphone          • invokes the consumer's handoff callback
+                                             • keeps the control service bound
                                              • lives until MicrophoneHandoff.close()
 ```
 
-LibreWakeWord asks the authenticated control binding to mint a short-lived, one-use token and then starts the explicit SDK service in the same consumer process. The new service validates the token, enters the microphone foreground-service state, and calls the consumer with the complete event and a scoped lease. This fresh component preserves the voice-interaction start allowance; promoting a long-lived bound service itself does not reliably retain that allowance on Android 17.
+While bound to the consumer's control service, LibreWakeWord starts the explicit SDK handoff service in the same process. It passes the event, a delivery callback and the control service's class in the start intent. The handoff service enters the microphone foreground-service state, finds the running control service, and calls it with the event and a scoped lease. It also binds the control service itself until the handoff closes, so LibreWakeWord unbinding a normal-latency handler can't destroy the code that is recording.
+
+For 10 seconds after the handoff starts, LibreWakeWord also holds a `BIND_ALLOW_BACKGROUND_ACTIVITY_STARTS` binding to the handler. That's how the system lets the active voice-interaction service show its UI, and it lets an ordinary `startActivity()` in the handler open the app's UI from the background. The handoff service has to be a separate component that LibreWakeWord starts. Android decides microphone eligibility for a background-started foreground service from whoever started it, and only LibreWakeWord holds the background-start privilege. A long-lived service promoting itself would be judged against the consumer's own background state.
 
 For the standard API, LibreWakeWord first joins the delayed DSP lookback to its bounded ordinary bridge using their boot-time `AudioTimestamp` mappings. It then starts the consumer handoff while the bridge remains active. The SDK constructs and starts an ordinary consumer-process `AudioRecord`; once that recorder is active, the SDK claims the handoff and LibreWakeWord closes the bridge. The returned `InputStream` emits the finalized prefix and then the consumer recorder's first fully unsilenced frames in microphone-ownership order. Independent recorder clocks are not compared across that final transition, and waveform content is never inspected to choose either boundary.
 
@@ -68,4 +83,4 @@ Consumer services are discovered from explicit, versioned manifest metadata and 
 
 Observer events are written to a bounded SQLite queue before delivery. Consumer acknowledgement removes the pending delivery; unacknowledged observer event IDs retry and survive process recreation. Microphone handoffs are deliberately live and non-durable, so they cannot replay after a restart. Bindings, callbacks, microphone starts, and webhook work stay off the detector thread.
 
-Prefix URI grants target only the approved consumer package and expire with the bounded asset. Webhook delivery is independently durable through WorkManager. Activity integration resolves an explicit component and falls back to a notification when Android disallows background launch.
+Prefix URI grants target only the approved consumer package and expire with the bounded asset. Webhook delivery is independently durable through WorkManager. Activity integration starts an explicit component.

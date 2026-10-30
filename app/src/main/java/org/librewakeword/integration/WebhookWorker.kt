@@ -2,9 +2,11 @@ package org.librewakeword.integration
 
 import android.content.Context
 import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -31,7 +33,7 @@ class WebhookWorker(context: Context, parameters: WorkerParameters) :
         } catch (_: Exception) {
             return@withContext Result.failure()
         }
-        if (target.scheme?.lowercase() !in setOf("http", "https") || target.host.isNullOrBlank()) {
+        if (target.scheme?.lowercase() != "https" || target.host.isNullOrBlank()) {
             return@withContext Result.failure()
         }
         var connection: HttpURLConnection? = null
@@ -53,10 +55,10 @@ class WebhookWorker(context: Context, parameters: WorkerParameters) :
             connection.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
             val response = connection.responseCode
             if (response in 200..299) Result.success()
-            else if (response == 408 || response == 429 || response >= 500) Result.retry()
+            else if (response == 408 || response == 429 || response >= 500) retryOrGiveUp()
             else Result.failure()
         } catch (_: IOException) {
-            Result.retry()
+            retryOrGiveUp()
         } catch (_: Exception) {
             Result.failure()
         } finally {
@@ -64,7 +66,12 @@ class WebhookWorker(context: Context, parameters: WorkerParameters) :
         }
     }
 
+    // A wake event that arrives minutes late is rarely useful, so retries are short-lived.
+    private fun retryOrGiveUp(): Result =
+        if (runAttemptCount + 1 < MAX_ATTEMPTS) Result.retry() else Result.failure()
+
     companion object {
+        private const val MAX_ATTEMPTS = 4
         private const val KEY_URL = "url"
         private const val KEY_SECRET = "secret"
         private const val KEY_PAYLOAD = "payload"
@@ -78,6 +85,9 @@ class WebhookWorker(context: Context, parameters: WorkerParameters) :
                         .putString(KEY_SECRET, config.secret)
                         .putString(KEY_PAYLOAD, payload)
                         .build(),
+                )
+                .setConstraints(
+                    Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
                 )
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
                 .build()

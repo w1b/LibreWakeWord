@@ -189,8 +189,8 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = "Used by the isolated SODA verification stage after a DSP trigger. " +
-                                "This is separate from the DSP keyphrase model above.",
+                        text = "Double-checks every DSP trigger to filter out false alarms. " +
+                                "This is separate from the DSP model above.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Text(
@@ -203,9 +203,8 @@ fun SettingsScreen(
                         Text("Import second-stage model")
                     }
                     Text(
-                        text = "For en-US, this refreshes the live x_google resource selected by " +
-                                "Velvet’s recovered SODA resource configuration. The download is " +
-                                "validated by SODA before it replaces the installed model.",
+                        text = "For en-US, this downloads the second-stage model Google currently " +
+                                "publishes. It only replaces the installed one if SODA accepts it.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     OutlinedButton(onClick = onRefreshPublishedSecondStage) {

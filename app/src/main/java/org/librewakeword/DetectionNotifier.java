@@ -35,10 +35,6 @@ public final class DetectionNotifier {
         }
     }
 
-    static int getCount() {
-        return count.get();
-    }
-
     public static void fire(Context ctx, WakewordEvent event) {
         int n = count.incrementAndGet();
         String time = DateFormat.format("HH:mm:ss", System.currentTimeMillis()).toString();

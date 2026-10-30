@@ -149,6 +149,8 @@ LibreWakeWord joins its DSP lookback and short ordinary-recorder bridge before d
 
 Closing the capture also closes its handoff. The foreground notification remains until then; override `createMicrophoneHandoffNotification` to customize it. Close the handoff on every success, failure, cancellation, and shutdown path.
 
+For 10 seconds after a handoff starts, the handler may start its own activities from the background (for example its assistant UI) with a plain `startActivity()`. Android normally blocks that for background apps; LibreWakeWord lends the handler its privilege for that window, the same way Android treats the active voice-interaction service.
+
 The callback includes the detection event. Prefix finalization is an internal transport operation, not a second app callback: a successful handler invocation is never followed by another `onWakeword` or `onMicrophoneHandoff` call for that event. If the handler does not override `onMicrophoneHandoff`, the base class calls `onWakeword` and releases the handoff without capturing.
 
 Advanced handlers that require another sample format, audio source, or recorder configuration can own the handoff manually:
@@ -229,7 +231,7 @@ Approval is bound to the component, signing identity, and declared events, audio
 
 ## Activity and webhook integrations
 
-An app exposing a default `ACTION_VOICE_COMMAND` activity requires no SDK integration. The user can select it in LibreWakeWord. If Android blocks a background activity launch, LibreWakeWord posts a user-action notification instead.
+An app exposing a default `ACTION_VOICE_COMMAND` activity requires no SDK integration. The user can select it in LibreWakeWord, which opens it after each confirmed wake word.
 
 Webhooks use CloudEvents 1.0 structured JSON with content type `application/cloudevents+json`. When configured with a secret, requests include:
 
@@ -237,4 +239,4 @@ Webhooks use CloudEvents 1.0 structured JSON with content type `application/clou
 LWW-Signature: t=<unix-seconds>,v1=<hex HMAC-SHA256 of "timestamp.payload">
 ```
 
-Transient failures use WorkManager retry. Webhooks never contain wake-word audio.
+Transient failures (network errors, 408, 429, 5xx) are retried a few times with backoff while the device has a network, then dropped; a wake event that arrives minutes late is rarely useful. Webhook URLs must use HTTPS. Webhooks never contain wake-word audio.

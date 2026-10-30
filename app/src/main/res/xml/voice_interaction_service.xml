@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- LibreWakeWord only uses the voice-interaction service to own the DSP detector. It is not an
+     assistant, so it is not offered as one; the session and recognition services are stubs the
+     framework requires before it accepts the service. -->
 <voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:sessionService="org.librewakeword/.WakewordVoiceInteractionSessionService"
     android:recognitionService="org.librewakeword/.WakewordRecognitionService"
-    android:supportsAssist="true"
-    android:supportsLaunchVoiceAssistFromKeyguard="true"
-    android:supportsLocalInteraction="true" />
+    android:supportsAssist="false" />
