@@ -12,7 +12,7 @@ Use JDK 17 and Android SDK 37. Keep models, firmware extracts, device logs, and 
   :app:lintDebug
 ```
 
-Run connected tests only on a device where replacing LibreWakeWord and changing the default assistant are acceptable:
+Run connected tests only on a device where replacing LibreWakeWord and its data is acceptable:
 
 ```bash
 ./gradlew :app:connectedDebugAndroidTest

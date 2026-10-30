@@ -8,8 +8,6 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.ComponentName
 import android.net.Uri
-import android.provider.Settings
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -20,13 +18,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
-import org.librewakeword.integration.ActivityAction
 
-/** UI-facing mirror of [WakewordState.Code], kept separate so the ui/ package (a different
- * Java package) never needs access to the package-private WakewordState class. */
+/** UI-facing mirror of the package-private [WakewordState.Code]. */
 enum class UiStatus {
-    NEEDS_SHIZUKU, NEEDS_SHIZUKU_PERMISSION, NEEDS_VIS, READY_TO_RESTORE_VIS,
-    NEEDS_MODEL, READY_TO_ARM, ARMING, LISTENING, STOPPED, ERROR,
+    NEEDS_SHIZUKU, NEEDS_SHIZUKU_PERMISSION, NEEDS_MODEL, READY_TO_ARM, ARMING, LISTENING,
+    STOPPED, ERROR,
 }
 
 data class ConsumerIntegrationUi(
@@ -42,10 +38,6 @@ data class VoiceActivityUi(val component: String, val label: String)
 data class HotwordUiState(
     val status: UiStatus = UiStatus.NEEDS_SHIZUKU,
     val detail: String = "",
-    val shizukuRunning: Boolean = false,
-    val shizukuGranted: Boolean = false,
-    val isCurrentVis: Boolean = false,
-    val recognitionStarted: Boolean = false,
     val modelDescription: String = "No model imported",
     val secondStageModelDescription: String = "No second-stage model imported",
     val consumerIntegrations: List<ConsumerIntegrationUi> = emptyList(),
@@ -147,9 +139,6 @@ class HotwordViewModel(application: Application) : AndroidViewModel(application)
     fun refresh() {
         val ctx = getApplication<Application>()
         val state = WakewordState.evaluate(ctx)
-        val shizukuUp = Shizuku.pingBinder()
-        val shizukuGranted =
-            shizukuUp && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         val app = getApplication<HotwordApplication>()
         val integrationStore = app.detectionCoordinator.integrationStore
         val consumers = integrationStore.discoverConsumers().map { consumer ->
@@ -173,17 +162,13 @@ class HotwordViewModel(application: Application) : AndroidViewModel(application)
                 handler = consumer.handler,
             )
         }
-        val voiceActivities = ActivityAction(ctx, integrationStore).discover().map {
+        val voiceActivities = integrationStore.discoverVoiceActivities().map {
             VoiceActivityUi(it.component.flattenToString(), it.label)
         }
         _uiState.update {
             it.copy(
                 status = UiStatus.valueOf(state.code.name),
                 detail = state.detail,
-                shizukuRunning = shizukuUp,
-                shizukuGranted = shizukuGranted,
-                isCurrentVis = WakewordState.isCurrentVis(ctx),
-                recognitionStarted = WakewordVoiceInteractionService.isRecognitionStarted(),
                 modelDescription = state.modelConfig.describeModel(),
                 secondStageModelDescription = SecondStageModel.describe(ctx),
                 voiceMatchDescription = VoiceMatchModel.describe(ctx),
@@ -209,29 +194,15 @@ class HotwordViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun openVoiceInputSettings() {
-        val ctx = getApplication<Application>()
-        val intent = Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        try {
-            ctx.startActivity(intent)
-        } catch (_: Throwable) {
-        }
-    }
-
     fun armNow() {
-        WakewordState.clearError()
         ShizukuAutoArm.armNow()
         refresh()
     }
 
     fun stopArming() {
         val ctx = getApplication<Application>()
-        // Persisted: the broadcast below makes the privileged instrumentation finish, which
-        // kills this whole process as a side effect (see HotwordInstrumentation). Without this
-        // flag surviving that death, ShizukuAutoArm would just re-arm on the next app launch.
+        // Ending the instrumentation also ends this process.
         WakewordState.setUserStopped(ctx, true)
-        Log.i("HotwordViewModel", "Stop tapped; sending ${HotwordInstrumentation.ACTION_STOP_ARMING}")
         val intent = Intent(HotwordInstrumentation.ACTION_STOP_ARMING)
         intent.setPackage(ctx.packageName)
         ctx.sendBroadcast(intent)
@@ -261,11 +232,11 @@ class HotwordViewModel(application: Application) : AndroidViewModel(application)
         val state = _uiState.value
         val uri = runCatching { java.net.URI(state.webhookUrl.trim()) }.getOrNull()
         val invalidUrl = uri == null ||
-            uri.scheme?.lowercase() !in setOf("http", "https") ||
+            uri.scheme?.lowercase() != "https" ||
             uri.host.isNullOrBlank()
         if (state.webhookEnabled && invalidUrl) {
             _uiState.update {
-                it.copy(integrationMessage = "Webhook URL must be an absolute http or https URL.")
+                it.copy(integrationMessage = "Webhook URL must be an https:// URL.")
             }
             return
         }
@@ -300,9 +271,7 @@ class HotwordViewModel(application: Application) : AndroidViewModel(application)
         val s = _uiState.value
         try {
             val keyphraseId = s.keyphraseId.trim().toInt()
-            require(keyphraseId in 0..63) {
-                "Keyphrase id must be between 0 and 63 for Android HDS results"
-            }
+            require(keyphraseId >= 0) { "Keyphrase id must not be negative" }
             val modelVersion = s.modelVersion.trim().toInt()
             ModelConfig.saveMetadata(
                 getApplication(), s.phrase, s.localeTag, keyphraseId, s.vendorUuid, modelVersion,

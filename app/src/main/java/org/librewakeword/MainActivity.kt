@@ -63,7 +63,6 @@ class MainActivity : ComponentActivity() {
                                 onOpenIntegrations = { navController.navigate("integrations") },
                                 onRequestShizukuPermission = viewModel::requestShizukuPermission,
                                 onOpenShizukuManager = viewModel::openShizukuManager,
-                                onOpenVoiceInputSettings = viewModel::openVoiceInputSettings,
                                 onArm = viewModel::armNow,
                                 onStop = viewModel::stopArming,
                             )

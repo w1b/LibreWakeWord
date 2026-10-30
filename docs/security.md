@@ -8,11 +8,11 @@ Approvals bind the component name to the package's current signing identity and 
 
 ## Consumer transport
 
-LibreWakeWord binds explicit components protected by its `org.librewakeword.permission.BIND_CONSUMER` signature permission. The SDK also verifies that Binder callbacks come from the UID owning the `org.librewakeword` package. Microphone foreground-service starts require a short-lived, one-use token minted inside the consumer process. LibreWakeWord starts the explicit SDK handoff service directly so Android attributes the sensitive start to the selected voice-interaction provider; the service consumes the token before invoking consumer code. The signature permission, caller check, and one-use capability are independent layers.
+LibreWakeWord binds explicit components protected by its `org.librewakeword.permission.BIND_CONSUMER` signature permission. The SDK also verifies that Binder callbacks come from the UID owning the `org.librewakeword` package. The SDK handoff service is protected by the same signature permission, so only LibreWakeWord can start it. LibreWakeWord starts it directly so that Android attributes the sensitive microphone foreground-service start to LibreWakeWord.
 
 Consumers should still treat event contents as input and use `eventId` for idempotency.
 
-Audio is exposed by a non-exported content provider using temporary, package-specific grants for individual URIs. Assets are read-only, expire after approximately five minutes, and are capped by both clip size and asset count. A URI is not a durable capability.
+Audio is exposed by a non-exported content provider using temporary, package-specific grants for individual URIs. Assets are read-only, expire after approximately five minutes, and are capped in number. Clip length is bounded by the verification window that produced them. A URI is not a durable capability.
 
 ## Detection and verifier boundary
 
@@ -22,20 +22,22 @@ The active detector and SODA verifier run inside LibreWakeWord's voice-interacti
 
 - Imported models and optional Voice Match state are app-private.
 - Wake-prefix WAV files live in the cache and expire automatically.
-- A bounded SQLite journal retains recent event metadata and unacknowledged consumer deliveries.
-- Webhook jobs retain their small JSON payload until WorkManager completes or abandons the job.
+- A bounded SQLite queue retains observer deliveries until they are acknowledged.
+- Webhook jobs retain their small JSON payload, URL and signing secret until WorkManager completes or abandons the job.
 - Webhooks never include audio.
 
 LibreWakeWord does not retain a continuous microphone recording.
 
 ## Webhooks
 
-Webhook destinations are configured by the device user. HTTPS is recommended. A configured secret adds a timestamped HMAC-SHA256 signature so receivers can authenticate the payload and enforce a replay window. Secrets remain in app-private preferences and are never included in the body or logs.
+Webhook destinations are configured by the device user. Only HTTPS URLs are accepted. A configured secret adds a timestamped HMAC-SHA256 signature so receivers can authenticate the payload and enforce a replay window. Secrets stay in app-private storage (preferences and pending WorkManager jobs) and are never included in the body or logs.
 
 The receiver should compute HMAC-SHA256 over `timestamp + "." + exact_request_body`, compare it in constant time, and reject timestamps outside its chosen replay window.
 
 ## Privileged arming
 
-Arming requires LibreWakeWord to be the selected voice-interaction service. Shizuku launches only the self-targeted instrumentation used for enrollment and detector creation. The adopted shell identity is held while armed because Android checks that identity across the detector lifecycle.
+Arming does not require the default-assistant role. Through Shizuku (shell uid), LibreWakeWord selects its own voice-interaction service and launches its own instrumentation. While armed, that instrumentation lets the whole LibreWakeWord uid act with four shell permissions: `MANAGE_VOICE_KEYPHRASES`, `RECORD_AUDIO`, `CAPTURE_AUDIO_HOTWORD` and `START_ACTIVITIES_FROM_BACKGROUND`. It also inherits shell's background activity and foreground-service start privileges. The identity is held while armed because Android checks it across the detector lifecycle. Anyone able to run code inside LibreWakeWord's process while it is armed gets those capabilities.
+
+After each wake word, the enabled handler may start its own activities from the background for 10 seconds. LibreWakeWord lends this with a `BIND_ALLOW_BACKGROUND_ACTIVITY_STARTS` binding to that handler only. Observers never get it, and the handler gains no permission.
 
 The current release remains debug-signed by project choice. A public binary release must use a stable protected release key; changing the LibreWakeWord signer changes the identity consumers may choose to trust.

@@ -1,9 +1,5 @@
 package org.librewakeword.integration
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -15,9 +11,11 @@ data class VoiceActivity(
     val signingCertificateSha256: String,
 )
 
+/**
+ * Opens the selected ACTION_VOICE_COMMAND activity. Background activity starts are allowed
+ * because the arming instrumentation runs with shell's START_ACTIVITIES_FROM_BACKGROUND.
+ */
 class ActivityAction(private val context: Context, private val store: IntegrationStore) {
-    fun discover(): List<VoiceActivity> = store.discoverVoiceActivities()
-
     fun dispatch() {
         val component = store.activityComponent() ?: return
         val intent = Intent(Intent.ACTION_VOICE_COMMAND)
@@ -27,39 +25,11 @@ class ActivityAction(private val context: Context, private val store: Integratio
         try {
             context.startActivity(intent)
         } catch (error: Throwable) {
-            Log.w(TAG, "Background activity launch failed; posting a user action", error)
-            try {
-                val manager = context.getSystemService(NotificationManager::class.java)
-                manager.createNotificationChannel(
-                    NotificationChannel(
-                        CHANNEL,
-                        "Wake word actions",
-                        NotificationManager.IMPORTANCE_DEFAULT,
-                    ),
-                )
-                val pending = PendingIntent.getActivity(
-                    context,
-                    0,
-                    intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-                val notification = Notification.Builder(context, CHANNEL)
-                    .setContentTitle("Wake word detected")
-                    .setContentText("Tap to open ${component.packageName}")
-                    .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-                    .setContentIntent(pending)
-                    .setAutoCancel(true)
-                    .build()
-                manager.notify(FALLBACK_ID, notification)
-            } catch (notificationError: Throwable) {
-                Log.e(TAG, "Could not post fallback activity notification", notificationError)
-            }
+            Log.w(TAG, "Could not open ${component.flattenToShortString()}", error)
         }
     }
 
-    companion object {
-        const val CHANNEL = "wakeword_detections"
-        private const val TAG = "WakewordActivity"
-        private const val FALLBACK_ID = 1002
+    private companion object {
+        const val TAG = "WakewordActivity"
     }
 }

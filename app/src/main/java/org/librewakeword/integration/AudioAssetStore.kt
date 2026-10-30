@@ -49,10 +49,6 @@ class AudioAssetStore(private val context: Context) {
         )
     }
 
-    fun cleanup(now: Long = System.currentTimeMillis()) {
-        cleanup(now, MAX_ASSETS)
-    }
-
     private fun cleanup(now: Long, maximumAssets: Int) {
         directory.listFiles()?.forEach { file ->
             if (!file.isFile || file.lastModified() <= now) delete(file)

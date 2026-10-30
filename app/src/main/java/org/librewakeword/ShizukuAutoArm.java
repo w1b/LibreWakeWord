@@ -1,11 +1,11 @@
 package org.librewakeword;
 
+import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.os.IBinder;
-import android.provider.Settings;
 import android.util.Log;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -13,17 +13,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import rikka.shizuku.Shizuku;
 
 /**
- * Auto-launches the arming instrumentation via a Shizuku daemon UserService whenever Shizuku's
- * binder becomes available (app start, or Shizuku (re)started after a reboot), so re-arming
- * after a reboot doesn't require typing an adb command by hand -- only re-starting Shizuku
- * itself is manual.
+ * Starts the arming session through a Shizuku user service: on an explicit Arm tap, and
+ * automatically whenever Shizuku's binder becomes available (app start, or Shizuku started
+ * after a reboot) unless the user stopped arming.
  *
- * Goes through HotwordUserService.launchInstrumentation() (a .daemon(true) Shizuku UserService)
- * rather than Shizuku.newProcess() directly: newProcess()'s spawned child was empirically dying
- * within milliseconds, before the target app's UiAutomationConnection could be used. The daemon
- * UserService is a stable long-lived host process for the "am instrument -w" child instead.
+ * <p>The user service is a daemon rather than a {@code Shizuku.newProcess()} child because the
+ * `am instrument -w` process it starts must stay alive for as long as the detector is armed.
  */
-public class ShizukuAutoArm {
+public final class ShizukuAutoArm {
     private static final String TAG = "HotwordShizukuArm";
     private static final AtomicBoolean launching = new AtomicBoolean(false);
     private static volatile boolean listenerRegistered;
@@ -31,104 +28,66 @@ public class ShizukuAutoArm {
 
     public static synchronized void init(Context context) {
         appContext = context.getApplicationContext();
-        if (isAutoArmDisabledForDebug(appContext)) {
-            Log.i(TAG, "auto-arm disabled by global debug setting");
-            return;
-        }
-        if (listenerRegistered) {
-            return;
-        }
-        if (HotwordInstrumentation.isInstrumentedProcess) {
-            Log.i(TAG, "this process is the instrumentation target, not registering auto-arm");
+        // The instrumented process is the arming session itself.
+        if (listenerRegistered || HotwordInstrumentation.isInstrumentedProcess) {
             return;
         }
         listenerRegistered = true;
-        Shizuku.addBinderReceivedListenerSticky(() -> onShizukuAvailable(false));
-        Shizuku.addBinderDeadListener(() -> Log.i(TAG, "Shizuku binder dead"));
+        Shizuku.addBinderReceivedListenerSticky(() -> arm(false));
     }
 
-    /** Manual re-arm entry point for the UI (e.g. an "Arm" button). Unlike the automatic
-     * binder-received trigger, this always clears the user-stopped flag first: an explicit tap
-     * means the user wants it armed regardless of a prior Stop. Without this, evaluate() would
-     * keep returning STOPPED and onShizukuAvailable() below would keep bailing out. */
+    /** Arm button: clears a previous user stop. */
     public static void armNow() {
         Context ctx = appContext;
         if (ctx != null) {
             WakewordState.setUserStopped(ctx, false);
+            WakewordState.clearError(ctx);
         }
-        onShizukuAvailable(true);
+        arm(true);
     }
 
-    /**
-     * Re-evaluate automatic arming after boot or package replacement. This deliberately obeys
-     * the debug auto-arm switch; only an explicit UI Arm tap may bypass that switch.
-     */
+    /** Boot and package replacement: arms only if the user hasn't stopped arming. */
     public static void autoArmIfReady() {
-        onShizukuAvailable(false);
+        arm(false);
     }
 
-    private static void onShizukuAvailable(boolean explicitlyRequested) {
-        if (!explicitlyRequested && isAutoArmDisabledForDebug(appContext)) {
-            Log.i(TAG, "auto-arm disabled by global debug setting");
-            return;
-        }
-        if (WakewordVoiceInteractionService.isRecognitionStarted()) {
-            Log.i(TAG, "already armed, skipping auto-launch");
-            return;
-        }
+    private static void arm(boolean explicit) {
         Context ctx = appContext;
-        if (ctx == null) {
-            Log.i(TAG, "no application context yet");
+        if (ctx == null || WakewordVoiceInteractionService.isArmed()) {
             return;
         }
-        if (!Shizuku.pingBinder()) {
-            Log.i(TAG, "Shizuku not running yet");
-            return;
-        }
-        int shizukuUid;
-        try {
-            shizukuUid = Shizuku.getUid();
-        } catch (Throwable error) {
-            Log.i(TAG, "Shizuku binder is not ready yet", error);
-            return;
-        }
-        Log.i(TAG, (explicitlyRequested ? "manual arm requested" : "Shizuku binder available")
-                + ", uid=" + shizukuUid);
-        if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-            Log.i(TAG, "Shizuku permission not granted yet -- open the app once to grant it");
+        if (!Shizuku.pingBinder()
+                || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+            Log.i(TAG, "Shizuku not running or not granted");
             return;
         }
         WakewordState state = WakewordState.evaluate(ctx);
-        if (state.code != WakewordState.Code.READY_TO_ARM
-                && state.code != WakewordState.Code.READY_TO_RESTORE_VIS) {
-            Log.i(TAG, "not ready to arm: " + state.label());
+        if (state.code != WakewordState.Code.READY_TO_ARM) {
+            Log.i(TAG, "not arming: " + state.label());
             return;
         }
         if (!launching.compareAndSet(false, true)) {
-            Log.i(TAG, "auto-launch already in flight, skipping");
             return;
         }
+        Log.i(TAG, explicit ? "arming on request" : "arming automatically");
         WakewordState.setArming(ctx, true);
-        bindAndLaunch();
-    }
-
-    private static void bindAndLaunch() {
+        // Starting instrumentation kills this process, so reopen the UI if it was visible.
+        boolean openUi = explicit || isForeground();
         Shizuku.UserServiceArgs args = new Shizuku.UserServiceArgs(
-                new ComponentName("org.librewakeword", HotwordUserService.class.getName()))
+                new ComponentName(ctx.getPackageName(), HotwordUserService.class.getName()))
                 .daemon(true)
                 .processNameSuffix("hotword")
                 .debuggable(false)
-                .version(19);
+                // Bump whenever HotwordUserService changes so Shizuku replaces the daemon.
+                .version(20);
         ServiceConnection connection = new ServiceConnection() {
             @Override
             public void onServiceConnected(ComponentName name, IBinder binder) {
                 try {
-                    IHotwordUserService svc = IHotwordUserService.Stub.asInterface(binder);
-                    svc.launchInstrumentation();
-                    Log.i(TAG, "launchInstrumentation() sent via daemon UserService");
+                    IHotwordUserService.Stub.asInterface(binder).launchInstrumentation(openUi);
                 } catch (Throwable t) {
-                    Log.e(TAG, "launchInstrumentation call failed", t);
-                    WakewordState.setError(appContext, "launchInstrumentation failed: " + t.getMessage());
+                    Log.e(TAG, "launchInstrumentation failed", t);
+                    WakewordState.setError(ctx, "Could not start arming: " + t.getMessage());
                 } finally {
                     launching.set(false);
                 }
@@ -136,28 +95,21 @@ public class ShizukuAutoArm {
 
             @Override
             public void onServiceDisconnected(ComponentName name) {
-                Log.i(TAG, "auto-arm UserService disconnected");
             }
         };
         try {
             Shizuku.bindUserService(args, connection);
         } catch (Throwable t) {
             Log.e(TAG, "bindUserService failed", t);
-            WakewordState.setError(appContext, "bindUserService failed: " + t.getMessage());
+            WakewordState.setError(ctx, "Could not reach Shizuku: " + t.getMessage());
             launching.set(false);
         }
     }
 
-    private static boolean isAutoArmDisabledForDebug(Context context) {
-        if (context == null) {
-            return false;
-        }
-        try {
-            return Settings.Global.getInt(context.getContentResolver(),
-                    "librewakeword_disable_auto_arm", 0) == 1;
-        } catch (Throwable t) {
-            return false;
-        }
+    private static boolean isForeground() {
+        ActivityManager.RunningAppProcessInfo info = new ActivityManager.RunningAppProcessInfo();
+        ActivityManager.getMyMemoryState(info);
+        return info.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
     }
 
     private ShizukuAutoArm() {

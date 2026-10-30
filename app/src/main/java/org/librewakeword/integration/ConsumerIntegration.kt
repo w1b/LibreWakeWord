@@ -124,10 +124,6 @@ class IntegrationStore(private val context: Context) {
         it.handler && it.confirmedEvents
     }
 
-    fun confirmedHandlerPackage(): String? = enabledConsumers().singleOrNull {
-        it.handler && it.confirmedEvents
-    }?.component?.packageName
-
     fun setConsumerEnabled(component: ComponentName, enabled: Boolean): Boolean {
         val discovered = discoverConsumers()
         val target = discovered.firstOrNull { it.component == component } ?: return false

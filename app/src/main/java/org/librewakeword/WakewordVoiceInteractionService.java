@@ -16,7 +16,6 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Locale;
 import java.util.UUID;
@@ -27,12 +26,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Owns the system DSP detector and the bounded, post-trigger verification capture. */
+/**
+ * Owns the system DSP detector and the bounded, post-trigger verification capture.
+ *
+ * <p>Android only lets the current voice-interaction service create an
+ * {@link AlwaysOnHotwordDetector}; this class exists to be that service. It does nothing until
+ * {@link HotwordInstrumentation} arms it, because the detector needs the adopted shell identity.
+ */
 public class WakewordVoiceInteractionService extends VoiceInteractionService {
     private static final String TAG = "HotwordVIS";
     private static final long VERIFICATION_WINDOW_MILLIS = 3_000L;
     private static volatile WakewordVoiceInteractionService current;
-    private static volatile boolean instrumentationArmingAllowed;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Object verifierLock = new Object();
@@ -44,10 +48,12 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
                 task.run();
             }, "wakeword-verifier"));
 
-    private Object detector;
+    private AlwaysOnHotwordDetector detector;
     private SodaHotwordVerifier.Engine verifier;
     private WakewordLiveInput preparedLiveInput;
-    private boolean startAttempted;
+    /** True while recognition is started or a one-shot candidate is being handled. */
+    private volatile boolean armed;
+    private boolean recognitionStarted;
     private boolean candidateHandlerMode;
     private long detectorGeneration;
 
@@ -56,28 +62,13 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
         super.onCreate();
         current = this;
         Log.i(TAG, "onCreate uid=" + Process.myUid());
-        logPermissionState("onCreate");
         DetectionNotifier.ensureChannel(this);
-    }
-
-    @Override
-    public void onReady() {
-        super.onReady();
-        Log.i(TAG, "onReady");
-        if (instrumentationArmingAllowed) {
-            mainHandler.postDelayed(this::createDetector, 750);
-        } else {
-            Log.i(TAG, "onReady: waiting for instrumentation arming gate");
-        }
     }
 
     @Override
     public void onShutdown() {
         Log.i(TAG, "onShutdown");
         destroyDetector();
-        if (current == this) {
-            current = null;
-        }
         super.onShutdown();
     }
 
@@ -91,48 +82,42 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
         super.onDestroy();
     }
 
-    static boolean createDetectorFromInstrumentation() {
-        WakewordVoiceInteractionService service = current;
-        if (service == null) {
-            Log.w(TAG, "createDetectorFromInstrumentation: no current service");
-            return false;
-        }
-        instrumentationArmingAllowed = true;
-        service.mainHandler.post(() -> service.createDetector("instrumentation"));
-        return true;
+    static WakewordVoiceInteractionService current() {
+        return current;
     }
 
-    static boolean isRecognitionStarted() {
+    static boolean isArmed() {
         WakewordVoiceInteractionService service = current;
-        return service != null && service.startAttempted;
+        return service != null && service.armed;
     }
 
-    static boolean readyFromInstrumentation() {
-        WakewordVoiceInteractionService service = current;
-        if (service == null) {
-            Log.w(TAG, "readyFromInstrumentation: no current service");
-            return false;
-        }
-        instrumentationArmingAllowed = true;
-        service.mainHandler.post(() -> {
-            Log.i(TAG, "readyFromInstrumentation invoking onReady()");
-            service.onReady();
+    /**
+     * Creates and starts the detector. Called from the instrumentation thread once the shell
+     * identity is adopted; blocks until recognition has started or failed.
+     */
+    boolean armFromInstrumentation() throws InterruptedException {
+        CountDownLatch done = new CountDownLatch(1);
+        mainHandler.post(() -> {
+            // The system never delivers onReady() to this instance (see HotwordInstrumentation),
+            // and the base class only connects to the system service in onReady().
+            onReady();
+            createDetector("instrumentation");
+            done.countDown();
         });
-        return true;
-    }
-
-    static void clearInstrumentationArmingAllowed() {
-        instrumentationArmingAllowed = false;
-    }
-
-    static boolean stopFromInstrumentation() {
-        WakewordVoiceInteractionService service = current;
-        if (service == null) {
-            Log.w(TAG, "stopFromInstrumentation: no current service");
-            return false;
+        done.await();
+        for (int waited = 0; waited < 5_000 && !armed; waited += 100) {
+            Thread.sleep(100);
         }
-        service.mainHandler.post(service::destroyDetector);
-        return true;
+        return armed;
+    }
+
+    void disarmFromInstrumentation() throws InterruptedException {
+        CountDownLatch done = new CountDownLatch(1);
+        mainHandler.post(() -> {
+            destroyDetector();
+            done.countDown();
+        });
+        done.await(2, TimeUnit.SECONDS);
     }
 
     /** Reloads a newly imported SODA resource while leaving the DSP registration intact. */
@@ -187,17 +172,12 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
         }
     }
 
-    private void createDetector() {
-        createDetector("service-ready");
-    }
-
     private void createDetector(String source) {
         try {
             if (detector != null) {
                 Log.i(TAG, "detector already exists: " + detector);
                 return;
             }
-            logPermissionState("createDetector source=" + source);
             candidateHandlerMode = ((HotwordApplication) getApplication())
                     .getDetectionCoordinator().getIntegrationStore().hasCandidateHandler();
             if (!candidateHandlerMode) {
@@ -220,16 +200,16 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
                     Executor.class,
                     AlwaysOnHotwordDetector.Callback.class);
             create.setAccessible(true);
-            detector = create.invoke(this, cfg.phrase, cfg.locale(), getMainExecutor(),
-                    new DetectorCallback());
+            detector = (AlwaysOnHotwordDetector) create.invoke(this, cfg.phrase, cfg.locale(),
+                    getMainExecutor(), new DetectorCallback());
             detectorGeneration++;
-            Log.i(TAG, "createAlwaysOnHotwordDetector source=" + source
-                    + " candidateHandlerMode=" + candidateHandlerMode + " -> " + detector);
-            mainHandler.postDelayed(() -> startDetector("timeout"), 5000);
+            // Recognition starts from onAvailabilityChanged(STATE_KEYPHRASE_ENROLLED).
+            Log.i(TAG, "created detector source=" + source
+                    + " candidateHandlerMode=" + candidateHandlerMode);
         } catch (Throwable t) {
             closeVerifier();
             closePreparedLiveInput();
-            Log.e(TAG, "createDetector failed source=" + source, rootCause(t));
+            Log.e(TAG, "createDetector failed source=" + source, t);
         }
     }
 
@@ -298,39 +278,24 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
         if (previous != null) previous.close();
     }
 
-    private void logPermissionState(String label) {
-        Log.i(TAG, label + " permission CAPTURE_AUDIO_HOTWORD="
-                + checkSelfPermission("android.permission.CAPTURE_AUDIO_HOTWORD")
-                + " MANAGE_VOICE_KEYPHRASES="
-                + checkSelfPermission("android.permission.MANAGE_VOICE_KEYPHRASES")
-                + " RECORD_AUDIO="
-                + checkSelfPermission("android.permission.RECORD_AUDIO"));
-    }
-
     private void startDetector(String reason) {
+        if (detector == null || recognitionStarted) {
+            return;
+        }
         try {
-            if (startAttempted) {
-                Log.i(TAG, "startDetector skipped, already attempted; reason=" + reason);
-                return;
-            }
-            if (detector == null) {
-                Log.w(TAG, "startDetector skipped, detector is null; reason=" + reason);
-                return;
-            }
-            startAttempted = true;
-            Method start = detector.getClass().getMethod("startRecognition", int.class);
             // Do not ask the framework to restart recognition automatically. The DSP event's
             // capture session remains the source of truth for SODA and the bounded handoff
             // prefix. Starting the next recognition before that recorder opens causes the Pixel
             // sound-trigger HAL to replace the event client, invalidating its capture session.
-            int flags = AlwaysOnHotwordDetector.RECOGNITION_FLAG_CAPTURE_TRIGGER_AUDIO;
-            Object result = start.invoke(detector, flags);
-            Log.i(TAG, "startRecognition(" + flags + ") reason=" + reason + " -> " + result);
-            if (!(result instanceof Boolean) || ((Boolean) result)) {
-                ((HotwordApplication) getApplication()).getDetectionCoordinator().setArmed(true);
-            }
+            recognitionStarted = detector.startRecognition(
+                    AlwaysOnHotwordDetector.RECOGNITION_FLAG_CAPTURE_TRIGGER_AUDIO);
+            Log.i(TAG, "startRecognition reason=" + reason + " -> " + recognitionStarted);
         } catch (Throwable t) {
-            Log.e(TAG, "startDetector failed; reason=" + reason, rootCause(t));
+            Log.e(TAG, "startRecognition failed; reason=" + reason, t);
+        }
+        if (recognitionStarted && !armed) {
+            armed = true;
+            ((HotwordApplication) getApplication()).getDetectionCoordinator().setArmed(true);
         }
     }
 
@@ -338,16 +303,17 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
         detectorGeneration++;
         try {
             if (detector != null) {
-                Method destroy = detector.getClass().getMethod("destroy");
-                destroy.invoke(detector);
-                Log.i(TAG, "destroyDetector done");
+                detector.destroy();
             }
         } catch (Throwable t) {
-            Log.e(TAG, "destroyDetector failed", rootCause(t));
+            Log.e(TAG, "destroyDetector failed", t);
         } finally {
-            ((HotwordApplication) getApplication()).getDetectionCoordinator().setArmed(false);
+            if (armed) {
+                armed = false;
+                ((HotwordApplication) getApplication()).getDetectionCoordinator().setArmed(false);
+            }
             detector = null;
-            startAttempted = false;
+            recognitionStarted = false;
             candidateHandlerMode = false;
             closeVerifier();
             closePreparedLiveInput();
@@ -602,12 +568,14 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
         public void onDetected(AlwaysOnHotwordDetector.EventPayload eventPayload) {
             // Recognition was intentionally configured as one-shot so this event's capture
             // session stays valid until verification and handoff finish.
-            startAttempted = false;
+            recognitionStarted = false;
             long elapsedNanos = SystemClock.elapsedRealtimeNanos();
             long epochMillis = System.currentTimeMillis();
             String detectionId = UUID.randomUUID().toString();
-            HotwordPayload payload = HotwordPayload.from(eventPayload);
-            Log.i(TAG, "DSP candidate id=" + detectionId + " " + payload.describe());
+            Integer captureSession = eventPayload.getCaptureSession();
+            AudioFormat audioFormat = eventPayload.getCaptureAudioFormat();
+            Log.i(TAG, "DSP candidate id=" + detectionId + " captureSession=" + captureSession
+                    + " format=" + audioFormat);
 
             HotwordApplication application = (HotwordApplication) getApplication();
             if (candidateHandlerMode) {
@@ -631,7 +599,7 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
             long generation = detectorGeneration;
             try {
                 verificationExecutor.execute(() -> verifyCandidate(
-                        detectionId, generation, payload.captureSession, payload.audioFormat));
+                        detectionId, generation, captureSession, audioFormat));
             } catch (Throwable error) {
                 verificationInFlight.set(false);
                 application.getDetectionCoordinator().onRejected(detectionId);
@@ -674,86 +642,5 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
         public void onRejected(HotwordRejectedResult result) {
             Log.i(TAG, "unexpected framework rejection result=" + result);
         }
-    }
-
-    private static final class HotwordPayload {
-        final AudioFormat audioFormat;
-        final Integer captureSession;
-        final byte[] triggerAudio;
-        final Object hotwordDetectedResult;
-        final Object mediaSyncEvent;
-
-        private HotwordPayload(AudioFormat audioFormat, Integer captureSession,
-                byte[] triggerAudio, Object hotwordDetectedResult, Object mediaSyncEvent) {
-            this.audioFormat = audioFormat;
-            this.captureSession = captureSession;
-            this.triggerAudio = triggerAudio;
-            this.hotwordDetectedResult = hotwordDetectedResult;
-            this.mediaSyncEvent = mediaSyncEvent;
-        }
-
-        static HotwordPayload from(Object eventPayload) {
-            Object hotwordDetectedResult = invoke(
-                    eventPayload, "getHotwordDetectedResult", Object.class);
-            return new HotwordPayload(
-                    invoke(eventPayload, "getCaptureAudioFormat", AudioFormat.class),
-                    invoke(eventPayload, "getCaptureSession", Integer.class),
-                    invoke(eventPayload, "getTriggerAudio", byte[].class),
-                    hotwordDetectedResult,
-                    invoke(hotwordDetectedResult, "getMediaSyncEvent", Object.class));
-        }
-
-        String describe() {
-            return "captureSession=" + captureSession
-                    + ", audioFormat=" + describeFormat(audioFormat)
-                    + ", triggerAudioBytes="
-                    + (triggerAudio == null ? "null" : triggerAudio.length)
-                    + ", hotwordDetectedResult=" + describeObject(hotwordDetectedResult)
-                    + ", mediaSyncEvent=" + describeObject(mediaSyncEvent);
-        }
-
-        private static String describeFormat(AudioFormat format) {
-            if (format == null) {
-                return "null";
-            }
-            return "sampleRate=" + format.getSampleRate()
-                    + ", channelCount=" + format.getChannelCount()
-                    + ", channelMask=0x" + Integer.toHexString(format.getChannelMask())
-                    + ", channelIndexMask=0x"
-                    + Integer.toHexString(format.getChannelIndexMask())
-                    + ", frameSizeBytes=" + format.getFrameSizeInBytes()
-                    + ", encoding=" + format.getEncoding();
-        }
-
-        private static String describeObject(Object value) {
-            return value == null ? "null" : value.getClass().getName() + "(" + value + ")";
-        }
-
-        private static <T> T invoke(Object target, String methodName, Class<T> expectedType) {
-            if (target == null) {
-                return null;
-            }
-            try {
-                Method method = target.getClass().getMethod(methodName);
-                method.setAccessible(true);
-                Object value = method.invoke(target);
-                return expectedType.isInstance(value) ? expectedType.cast(value) : null;
-            } catch (NoSuchMethodException error) {
-                Log.i(TAG, "payload method unavailable: " + methodName);
-            } catch (InvocationTargetException error) {
-                Log.w(TAG, "payload method threw: " + methodName, error.getCause());
-            } catch (Throwable error) {
-                Log.w(TAG, "payload method failed: " + methodName, error);
-            }
-            return null;
-        }
-    }
-
-    private static Throwable rootCause(Throwable error) {
-        Throwable current = error;
-        while (current.getCause() != null) {
-            current = current.getCause();
-        }
-        return current;
     }
 }

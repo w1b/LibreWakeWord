@@ -9,6 +9,7 @@ import android.os.RemoteException;
 // Compile-time-only stub; the real framework interface is used at runtime.
 public interface IVoiceInteractionManagerService extends IInterface {
     int updateKeyphraseSoundModel(SoundTrigger.KeyphraseSoundModel model) throws RemoteException;
+    int deleteKeyphraseSoundModel(int keyphraseId, String bcp47Locale) throws RemoteException;
 
     abstract class Stub extends Binder implements IVoiceInteractionManagerService {
         public static IVoiceInteractionManagerService asInterface(IBinder obj) { return null; }

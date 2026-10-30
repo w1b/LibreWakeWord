@@ -1,5 +1,6 @@
 package org.librewakeword.sample
 
+import android.content.Intent
 import android.os.SystemClock
 import org.librewakeword.client.MicrophoneHandoff
 import org.librewakeword.client.WakewordAudioCapture
@@ -68,6 +69,9 @@ open class SampleAssistantService : WakewordConsumerService() {
                 it.copy(detail = "Listening… Tap Stop when the command is complete.")
             }
             recorderExecutor.execute { readCommand(entryId, capture) }
+            // Show the sample's UI; apps can't start activities from the background themselves.
+            // A handler may start its own activities for a few seconds after the wake word.
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (error: Throwable) {
             SampleCaptureController.finish(entryId)
             markFailure(entryId, error)

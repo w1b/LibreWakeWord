@@ -9,13 +9,15 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.Locale;
 import java.util.UUID;
 
 public final class ModelConfig {
     public static final String DEFAULT_VENDOR_UUID = "7038ddc8-30f2-11e6-b0ac-40a8f03d3f15";
-    // HotwordDetectedResult reserves keyphrase IDs to 0..63. Pixel's SODA maps x_google to 2.
+    // Pixel's SODA maps x_google to keyphrase 2.
     public static final int DEFAULT_KEYPHRASE_ID = 2;
     public static final int DEFAULT_MODEL_VERSION = 36;
     public static final String DEFAULT_PHRASE = "Hey Google";
@@ -57,15 +59,6 @@ public final class ModelConfig {
         String phrase = prefs.getString(KEY_PHRASE, DEFAULT_PHRASE);
         String localeTag = prefs.getString(KEY_LOCALE, DEFAULT_LOCALE);
         int keyphraseId = prefs.getInt(KEY_KEYPHRASE_ID, DEFAULT_KEYPHRASE_ID);
-        if (keyphraseId < 0 || keyphraseId > 63) {
-            // Older development builds used 102, which the DSP accepted but which the HDS result
-            // API cannot represent. Re-registering the same model with Pixel's x_google ID makes
-            // the DSP event and HDS result contract agree.
-            Log.w(TAG, "Migrating unsupported keyphrase ID " + keyphraseId + " to "
-                    + DEFAULT_KEYPHRASE_ID);
-            keyphraseId = DEFAULT_KEYPHRASE_ID;
-            prefs.edit().putInt(KEY_KEYPHRASE_ID, keyphraseId).apply();
-        }
         int modelVersion = prefs.getInt(KEY_MODEL_VERSION, DEFAULT_MODEL_VERSION);
         UUID vendorUuid = parseUuid(prefs.getString(KEY_VENDOR_UUID, DEFAULT_VENDOR_UUID));
         File privateModel = privateModelFile(ctx);
@@ -104,15 +97,6 @@ public final class ModelConfig {
         }
     }
 
-    static ModelConfig importModelFile(Context ctx, File file) throws Exception {
-        if (!file.isFile() || file.length() == 0) {
-            throw new IllegalArgumentException("Model file missing or empty: " + file);
-        }
-        try (FileInputStream input = new FileInputStream(file)) {
-            return importModel(ctx, input);
-        }
-    }
-
     private static ModelConfig importModel(Context ctx, InputStream in) throws Exception {
         File dir = new File(ctx.getFilesDir(), MODEL_DIR);
         if (!dir.isDirectory() && !dir.mkdirs()) {
@@ -143,42 +127,13 @@ public final class ModelConfig {
             tmp.delete();
             throw new IllegalArgumentException("Selected model is empty");
         }
-        replaceAtomically(dest, tmp);
+        Files.move(tmp.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE);
         String sha = sha256(dest);
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putString(KEY_SHA256, sha)
                 .apply();
         return load(ctx);
-    }
-
-    private static void replaceAtomically(File destination, File temporary) throws Exception {
-        File backup = new File(destination.getParentFile(), MODEL_FILE + ".previous");
-        if (backup.exists()) {
-            if (!destination.exists()) {
-                if (!backup.renameTo(destination)) {
-                    temporary.delete();
-                    throw new IllegalStateException("Could not restore previous model backup");
-                }
-            } else if (!backup.delete()) {
-                temporary.delete();
-                throw new IllegalStateException("Could not remove stale model backup");
-            }
-        }
-        boolean hadExisting = destination.exists();
-        if (hadExisting && !destination.renameTo(backup)) {
-            temporary.delete();
-            throw new IllegalStateException("Could not preserve existing model");
-        }
-        if (!temporary.renameTo(destination)) {
-            boolean restored = !hadExisting || backup.renameTo(destination);
-            temporary.delete();
-            throw new IllegalStateException(restored
-                    ? "Could not replace model file"
-                    : "Could not replace model file or restore its backup at " + backup);
-        }
-        if (backup.exists() && !backup.delete()) {
-            Log.w(TAG, "Imported model, but could not delete old backup " + backup);
-        }
     }
 
     boolean hasUsableModel() {
@@ -202,19 +157,7 @@ public final class ModelConfig {
         if (!cfg.hasUsableModel()) {
             throw new IllegalStateException("No wake word model imported");
         }
-        try (FileInputStream is = new FileInputStream(cfg.modelFile)) {
-            byte[] buf = new byte[(int) cfg.modelFile.length()];
-            int off = 0;
-            while (off < buf.length) {
-                int n = is.read(buf, off, buf.length - off);
-                if (n < 0) break;
-                off += n;
-            }
-            if (off != buf.length) {
-                throw new IllegalStateException("Short read: " + off + " of " + buf.length);
-            }
-            return buf;
-        }
+        return Files.readAllBytes(cfg.modelFile.toPath());
     }
 
     private static File privateModelFile(Context ctx) {
