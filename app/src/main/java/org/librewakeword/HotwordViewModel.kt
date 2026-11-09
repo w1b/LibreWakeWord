@@ -35,10 +35,16 @@ data class ConsumerIntegrationUi(
 
 data class VoiceActivityUi(val component: String, val label: String)
 
+/** A stored wake word model; [id] names its engine. */
+data class StoredModelUi(val id: String, val phrase: String, val description: String, val active: Boolean)
+
 data class HotwordUiState(
     val status: UiStatus = UiStatus.NEEDS_SHIZUKU,
     val detail: String = "",
     val modelDescription: String = "No model imported",
+    val storedModels: List<StoredModelUi> = emptyList(),
+    /** Google's model runs SODA after the DSP; a microWakeWord model doesn't. */
+    val usesSecondStage: Boolean = true,
     val secondStageModelDescription: String = "No second-stage model imported",
     val consumerIntegrations: List<ConsumerIntegrationUi> = emptyList(),
     val voiceActivities: List<VoiceActivityUi> = emptyList(),
@@ -169,7 +175,16 @@ class HotwordViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 status = UiStatus.valueOf(state.code.name),
                 detail = state.detail,
-                modelDescription = state.modelConfig.describeModel(),
+                modelDescription = state.modelConfig.let {
+                    if (it.hasUsableModel()) "${it.phrase} (${it.describeModel()})" else it.describeModel()
+                },
+                storedModels = ModelConfig.Engine.entries.map { ModelConfig.load(ctx, it) }
+                    .filter { it.hasUsableModel() }
+                    .map {
+                        StoredModelUi(it.engine.name, it.phrase, it.describeModel(),
+                            it.engine == state.modelConfig.engine)
+                    },
+                usesSecondStage = state.modelConfig.engine == ModelConfig.Engine.GOOGLE,
                 secondStageModelDescription = SecondStageModel.describe(ctx),
                 voiceMatchDescription = VoiceMatchModel.describe(ctx),
                 voiceMatchHasModel = VoiceMatchModel.hasModel(ctx),
@@ -201,9 +216,10 @@ class HotwordViewModel(application: Application) : AndroidViewModel(application)
 
     fun stopArming() {
         val ctx = getApplication<Application>()
-        // Ending the instrumentation also ends this process.
+        // Ending the instrumentation also ends this process; the UI is reopened afterwards.
         WakewordState.setUserStopped(ctx, true)
         val intent = Intent(HotwordInstrumentation.ACTION_STOP_ARMING)
+            .putExtra(HotwordInstrumentation.EXTRA_REOPEN_UI, true)
         intent.setPackage(ctx.packageName)
         ctx.sendBroadcast(intent)
     }
@@ -291,14 +307,41 @@ class HotwordViewModel(application: Application) : AndroidViewModel(application)
                 val config = withContext(Dispatchers.IO) {
                     ModelConfig.importModel(context, uri)
                 }
-                _uiState.update {
-                    it.copy(importMessage = "Imported model: ${config.modelFile.length()} bytes")
-                }
+                _uiState.update { it.copy(importMessage = "Imported ${config.phrase}") }
+                HotwordInstrumentation.reloadArmedModel()
+                loadModelFields()
                 refresh()
             } catch (t: Throwable) {
                 _uiState.update { it.copy(importMessage = "Import failed: ${t.message}") }
             }
         }
+    }
+
+    fun importMicroWakeWord(uris: List<Uri>) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            _uiState.update { it.copy(importMessage = "Converting microWakeWord model…") }
+            try {
+                val config = withContext(Dispatchers.IO) {
+                    ModelConfig.importMicroWakeWord(context, uris)
+                }
+                _uiState.update { it.copy(importMessage = "Imported ${config.phrase}") }
+                HotwordInstrumentation.reloadArmedModel()
+                loadModelFields()
+                refresh()
+            } catch (t: Throwable) {
+                _uiState.update { it.copy(importMessage = "Import failed: ${t.message}") }
+            }
+        }
+    }
+
+    /** Makes a stored model active; an armed detector switches to it immediately. */
+    fun setActiveModel(id: String) {
+        val ctx = getApplication<Application>()
+        ModelConfig.setActiveEngine(ctx, ModelConfig.Engine.valueOf(id))
+        HotwordInstrumentation.reloadArmedModel()
+        loadModelFields()
+        refresh()
     }
 
     fun clearImportMessage() {

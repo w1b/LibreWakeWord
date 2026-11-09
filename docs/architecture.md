@@ -40,7 +40,7 @@ Shizuku is not part of audio capture or consumer delivery. Shizuku and the `am i
 
 ## Verification
 
-The DSP callback emits a candidate event immediately. Unless a candidate-stage handler owns the fast path, LibreWakeWord opens the event's hotword lookback session and feeds bounded 16 kHz mono PCM to the SODA verifier on a dedicated audio-priority worker. A SODA acceptance produces a confirmed event; rejection ends only the confirmed path and never suppresses the already-emitted candidate event.
+The DSP callback emits a candidate event immediately. Unless a candidate-stage handler owns the fast path, LibreWakeWord opens the event's hotword lookback session and feeds bounded 16 kHz mono PCM to the SODA verifier on a dedicated audio-priority worker. A microWakeWord model has no second stage: its DSP detection is confirmed directly, and the lookback session and bridge only provide the wake audio. A SODA acceptance produces a confirmed event; rejection ends only the confirmed path and never suppresses the already-emitted candidate event.
 
 During verification, a bounded ordinary recorder in the same LibreWakeWord process captures the current microphone edge while the delayed DSP lookback feeds SODA. Android's capture policy permits both same-UID recorders to receive real audio. The bridge runs only after a DSP trigger and stops at handoff or rejection; it has no always-on battery cost and never becomes an ongoing consumer stream.
 

@@ -83,7 +83,9 @@ class MainActivity : ComponentActivity() {
                                 onBack = { navController.popBackStack() },
                                 onFieldsChanged = viewModel::updateMetadataFields,
                                 onSave = viewModel::saveMetadata,
+                                onSetActiveModel = viewModel::setActiveModel,
                                 onImport = viewModel::importModel,
+                                onImportMicroWakeWord = viewModel::importMicroWakeWord,
                                 onDismissImportMessage = viewModel::clearImportMessage,
                                 onImportSecondStage = viewModel::importSecondStageModel,
                                 onRefreshPublishedSecondStage =

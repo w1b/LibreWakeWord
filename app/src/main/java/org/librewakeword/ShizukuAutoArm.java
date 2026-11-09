@@ -79,7 +79,7 @@ public final class ShizukuAutoArm {
                 .processNameSuffix("hotword")
                 .debuggable(false)
                 // Bump whenever HotwordUserService changes so Shizuku replaces the daemon.
-                .version(20);
+                .version(21);
         ServiceConnection connection = new ServiceConnection() {
             @Override
             public void onServiceConnected(ComponentName name, IBinder binder) {

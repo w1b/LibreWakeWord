@@ -17,6 +17,7 @@ public class HotwordUserService extends IHotwordUserService.Stub {
             "org.librewakeword/.WakewordVoiceInteractionService";
     private static final String INSTRUMENTATION_COMPONENT =
             "org.librewakeword/.HotwordInstrumentation";
+    private static final String UI_COMPONENT = "org.librewakeword/.MainActivity";
 
     @Override
     public void launchInstrumentation(boolean openUi) {
@@ -34,11 +35,21 @@ public class HotwordUserService extends IHotwordUserService.Stub {
                     .redirectErrorStream(true)
                     .start();
             Thread drain = new Thread(() -> {
+                boolean reopenUi = false;
                 try (BufferedReader r = new BufferedReader(
                         new InputStreamReader(proc.getInputStream()))) {
                     String line;
                     while ((line = r.readLine()) != null) {
                         Log.i(TAG, "[am instrument] " + line);
+                        if (line.contains(HotwordInstrumentation.EXTRA_REOPEN_UI + "=true")) {
+                            reopenUi = true;
+                        }
+                    }
+                    proc.waitFor();
+                    // The session ended because the user pressed Stop, which also killed the
+                    // UI; bring it back now that the old process is gone.
+                    if (reopenUi) {
+                        new ProcessBuilder("am", "start", "-n", UI_COMPONENT).start().waitFor();
                     }
                 } catch (Throwable ignored) {
                 }

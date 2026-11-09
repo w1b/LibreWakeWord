@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-tint version of ic_launcher_foreground for themed icons; eyes are cut out of the head. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="768"
+    android:viewportHeight="768">
+    <group
+        android:translateX="128"
+        android:translateY="128">
+        <path
+            android:fillColor="#FFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M0,512A256,227.09 0,0 1,512 512ZM151.22,375.54a21.68,21.68 0,1 0,43.36 0a21.68,21.68 0,1 0,-43.36 0ZM387.2,375.54a21.68,21.68 0,1 0,43.36 0a21.68,21.68 0,1 0,-43.36 0Z" />
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="18.99"
+            android:strokeLineCap="round"
+            android:pathData="M140.39,308.23L140.39,224.21M371.61,308.23L415.64,236.67M415.32,191.25L414.98,141.7M442.97,200.39L462.85,174.01M458.84,222.63L482.4,214.98" />
+    </group>
+</vector>

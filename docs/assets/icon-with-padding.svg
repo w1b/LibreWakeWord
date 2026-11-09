@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 552" width="512" height="552">
+  <!-- LibreWakeWord icon.
+       The Android robot is reproduced or modified from work created and shared by Google
+       and used according to terms described in the Creative Commons 3.0 Attribution License. -->
+  <title>LibreWakeWord</title>
+  <defs><clipPath id="r"><rect width="512" height="512" rx="116"/></clipPath></defs>
+  <g clip-path="url(#r)">
+  <rect width="512" height="512" fill="#0B1218"/>
+  <g fill="#3DDC84" stroke="#3DDC84" stroke-width="18.99" stroke-linecap="round">
+    <path stroke="none" d="M0 512A256 227.09 0 0 1 512 512Z"/>
+    <line x1="140.39" y1="308.23" x2="140.39" y2="224.21"/>
+    <line x1="371.61" y1="308.23" x2="415.64" y2="236.67"/>
+  </g>
+  <g fill="#000000">
+    <circle cx="172.9" cy="375.54" r="21.68"/>
+    <circle cx="408.88" cy="375.54" r="21.68"/>
+  </g>
+  <g stroke="#FBBC04" stroke-width="18.99" stroke-linecap="round">
+    <line x1="415.32" y1="191.25" x2="414.98" y2="141.7"/>
+    <line x1="442.97" y1="200.39" x2="462.85" y2="174.01"/>
+    <line x1="458.84" y1="222.63" x2="482.4" y2="214.98"/>
+  </g>
+  </g>
+</svg>

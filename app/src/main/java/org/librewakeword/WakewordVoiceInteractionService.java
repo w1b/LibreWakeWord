@@ -55,6 +55,8 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
     private volatile boolean armed;
     private boolean recognitionStarted;
     private boolean candidateHandlerMode;
+    /** SODA verifies DSP candidates (Google's model); otherwise a DSP detection is final. */
+    private volatile boolean secondStage;
     private long detectorGeneration;
 
     @Override
@@ -105,6 +107,16 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
             done.countDown();
         });
         done.await();
+        return awaitArmed();
+    }
+
+    /** Recreates the detector after {@link #disarmFromInstrumentation()} and a re-enrollment. */
+    boolean rearmFromInstrumentation() throws InterruptedException {
+        mainHandler.post(() -> createDetector("model reloaded"));
+        return awaitArmed();
+    }
+
+    private boolean awaitArmed() throws InterruptedException {
         for (int waited = 0; waited < 5_000 && !armed; waited += 100) {
             Thread.sleep(100);
         }
@@ -180,11 +192,15 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
             }
             candidateHandlerMode = ((HotwordApplication) getApplication())
                     .getDetectionCoordinator().getIntegrationStore().hasCandidateHandler();
+            ModelConfig cfg = ModelConfig.load(this);
+            secondStage = cfg.engine == ModelConfig.Engine.GOOGLE;
             if (!candidateHandlerMode) {
                 replaceVerifier("detector creation");
-                synchronized (verifierLock) {
-                    if (verifier == null) {
-                        throw new IllegalStateException("Second-stage verifier is unavailable");
+                if (secondStage) {
+                    synchronized (verifierLock) {
+                        if (verifier == null) {
+                            throw new IllegalStateException("Second-stage verifier is unavailable");
+                        }
                     }
                 }
                 prepareLiveInput("detector creation");
@@ -192,7 +208,6 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
                 closeVerifier();
                 closePreparedLiveInput();
             }
-            ModelConfig cfg = ModelConfig.load(this);
             Method create = VoiceInteractionService.class.getDeclaredMethod(
                     "createAlwaysOnHotwordDetector",
                     String.class,
@@ -204,7 +219,7 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
                     getMainExecutor(), new DetectorCallback());
             detectorGeneration++;
             // Recognition starts from onAvailabilityChanged(STATE_KEYPHRASE_ENROLLED).
-            Log.i(TAG, "created detector source=" + source
+            Log.i(TAG, "created detector source=" + source + " engine=" + cfg.engine
                     + " candidateHandlerMode=" + candidateHandlerMode);
         } catch (Throwable t) {
             closeVerifier();
@@ -214,7 +229,7 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
     }
 
     private void replaceVerifier(String reason) {
-        if (candidateHandlerMode) {
+        if (candidateHandlerMode || !secondStage) {
             closeVerifier();
             return;
         }
@@ -343,7 +358,7 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
             synchronized (verifierLock) {
                 engine = verifier;
             }
-            if (engine == null || captureSession == null || captureSession < 0) {
+            if ((secondStage && engine == null) || captureSession == null || captureSession < 0) {
                 Log.w(TAG, "cannot verify candidate id=" + detectionId + " engine="
                         + (engine != null) + " captureSession=" + captureSession);
                 ((HotwordApplication) getApplication()).getDetectionCoordinator()
@@ -374,9 +389,11 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
                     }
                 });
                 requestLiveCapture.run();
-                result = engine.verify(stream,
-                        SystemClock.elapsedRealtime() + VERIFICATION_WINDOW_MILLIS,
-                        requestLiveCapture);
+                result = engine == null
+                        ? new SecondStageHotwordVerifier.Result(true, "DSP detection")
+                        : engine.verify(stream,
+                                SystemClock.elapsedRealtime() + VERIFICATION_WINDOW_MILLIS,
+                                requestLiveCapture);
                 boolean handoffClaimed = false;
                 boolean handoffStarted = false;
                 if (!result.accepted
@@ -393,7 +410,7 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
                             stream.diagnosticTimeline().getBytes(StandardCharsets.UTF_8));
                 }
                 if (requestGeneration != detectorGeneration) {
-                    engine.finishCapture();
+                    if (engine != null) engine.finishCapture();
                     Log.i(TAG, "discarding candidate after detector state changed id="
                             + detectionId);
                     ((HotwordApplication) getApplication()).getDetectionCoordinator()
@@ -487,7 +504,7 @@ public class WakewordVoiceInteractionService extends VoiceInteractionService {
                 } else {
                     stream.close();
                 }
-                engine.finishCapture();
+                if (engine != null) engine.finishCapture();
                 Log.i(TAG, "direct handoff started=" + handoffStarted
                         + " claimed=" + handoffClaimed
                         + " prefixBytes=" + capturedAudio.length);

@@ -18,7 +18,9 @@ import android.util.Log;
 import com.android.internal.app.IVoiceInteractionManagerService;
 
 import java.util.UUID;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -38,6 +40,8 @@ import java.util.concurrent.TimeUnit;
 public class HotwordInstrumentation extends Instrumentation {
     private static final String TAG = "HotwordInstr";
     static final String ACTION_STOP_ARMING = "org.librewakeword.action.STOP_ARMING";
+    /** Stop extra and result key: reopen the UI once this process is gone. */
+    static final String EXTRA_REOPEN_UI = "reopenUi";
     /** Instrumentation argument: reopen the UI, since starting instrumentation kills it. */
     static final String ARG_OPEN_UI = "openUi";
     private static final int PER_USER_UID_RANGE = 100_000;
@@ -46,7 +50,22 @@ public class HotwordInstrumentation extends Instrumentation {
     // ShizukuAutoArm can tell that it must not launch another arming session from here.
     static volatile boolean isInstrumentedProcess = false;
 
+    private enum Request { RELOAD, STOP }
+
+    /** Requests to the armed session in this process, or null while not armed. */
+    private static volatile BlockingQueue<Request> requests;
+
     private Bundle arguments;
+    private volatile boolean reopenUi;
+
+    /**
+     * Re-enrolls the configured model in the armed session, if this process holds one, so an
+     * import takes effect immediately. Returns whether a session was asked to reload.
+     */
+    static boolean reloadArmedModel() {
+        BlockingQueue<Request> queue = requests;
+        return queue != null && queue.offer(Request.RELOAD);
+    }
 
     @Override
     public void onCreate(Bundle arguments) {
@@ -65,7 +84,11 @@ public class HotwordInstrumentation extends Instrumentation {
             WakewordState.setError(getTargetContext(), "Arming failed: " + rootCause(t));
         } finally {
             WakewordState.setArming(getTargetContext(), false);
-            finish(0, new Bundle());
+            // Ending the instrumentation kills this process, UI included. HotwordUserService
+            // reads this result and reopens the UI after the process is gone.
+            Bundle results = new Bundle();
+            if (reopenUi) results.putString(EXTRA_REOPEN_UI, "true");
+            finish(0, results);
         }
     }
 
@@ -83,11 +106,12 @@ public class HotwordInstrumentation extends Instrumentation {
                 "android.permission.RECORD_AUDIO",
                 "android.permission.START_ACTIVITIES_FROM_BACKGROUND");
 
-        CountDownLatch stopRequested = new CountDownLatch(1);
+        BlockingQueue<Request> queue = new LinkedBlockingQueue<>();
         BroadcastReceiver stopReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context ignored, Intent intent) {
-                stopRequested.countDown();
+                reopenUi = intent.getBooleanExtra(EXTRA_REOPEN_UI, false);
+                queue.offer(Request.STOP);
             }
         };
         context.registerReceiver(stopReceiver, new IntentFilter(ACTION_STOP_ARMING),
@@ -102,10 +126,20 @@ public class HotwordInstrumentation extends Instrumentation {
                 throw new IllegalStateException("Detector did not start");
             }
             Log.i(TAG, "armed; holding shell identity until stopped");
-            stopRequested.await();
+            requests = queue;
+            while (queue.take() == Request.RELOAD) {
+                service.disarmFromInstrumentation();
+                enrollModel(context);
+                if (!service.rearmFromInstrumentation()) {
+                    throw new IllegalStateException("Detector did not restart with the new model");
+                }
+                Log.i(TAG, "reloaded model");
+            }
+            requests = null;
             service.disarmFromInstrumentation();
             Log.i(TAG, "stopped");
         } finally {
+            requests = null;
             ui.dropShellPermissionIdentity();
             context.unregisterReceiver(stopReceiver);
         }
